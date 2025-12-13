@@ -32,6 +32,7 @@ from sgm.image_ops import (
     save_png_resized_from_clipboard_qimage,
     save_png_resized_from_file,
 )
+from sgm.resources import resource_path
 
 
 def _thumb_for(path: Path, *, max_w: int = 128, max_h: int = 128) -> QPixmap | None:
@@ -296,7 +297,7 @@ class ImageCard(QFrame):
         return self._folder / self._spec.filename.format(basename=self._basename)
 
     def _overlay_empty_canvas_path(self) -> Path:
-        return Path(__file__).resolve().parents[3] / "resources" / "Overlay_empty.png"
+        return resource_path("Overlay_empty.png")
 
     def replace_from_file(self, src: Path, *, confirm_replace: bool = True) -> bool:
         if not src.exists() or not src.is_file():

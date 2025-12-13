@@ -8,6 +8,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from sgm.config import AppConfig
+from sgm.resources import resource_path
 from sgm.ui.main_window import MainWindow
 
 
@@ -21,9 +22,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Sprint Game Manager")
 
-    icon_cwd = Path.cwd() / "resources" / "icon.ico"
-    icon_repo = Path(__file__).resolve().parents[2] / "resources" / "icon.ico"
-    icon_path = icon_cwd if icon_cwd.exists() else icon_repo
+    icon_path = resource_path("icon.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 

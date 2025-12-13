@@ -44,6 +44,7 @@ from sgm.image_ops import (
     pil_from_qimage,
     save_png_resized_from_file,
 )
+from sgm.resources import resource_path, resources_dir
 from sgm.io_utils import RenameCollisionError, copy_file, plan_rename_for_game_files, rename_many, swap_files
 from sgm.scanner import scan_folder
 from sgm.ui.widgets import ImageCard, ImageSpec, OverlayPrimaryCard, SnapshotCard
@@ -1732,13 +1733,9 @@ class MainWindow(QMainWindow):
         if not game:
             return
 
-        # Prefer resources in CWD (packaged/run folder), fall back to repo resources.
-        cwd_resources = Path.cwd() / "resources"
-        repo_resources = Path(__file__).resolve().parents[3] / "resources"
-        resources_dir = cwd_resources if cwd_resources.exists() else repo_resources
-
-        rom_cfgs_dir = resources_dir / "rom_cfgs"
-        mapping_path = resources_dir / "cfg_game_mapping.tab"
+        base = resources_dir()
+        rom_cfgs_dir = base / "rom_cfgs"
+        mapping_path = base / "cfg_game_mapping.tab"
         if not rom_cfgs_dir.exists():
             QMessageBox.warning(self, "Config Lookup", f"Missing folder: {rom_cfgs_dir}")
             return
@@ -1844,7 +1841,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.choice:
             return
 
-        blank_default = Path(__file__).resolve().parents[3] / "resources" / "Overlay_blank.png"
+        blank_default = resource_path("Overlay_blank.png")
         override_raw = (self._config.overlay_template_override or "").strip()
         blank = Path(override_raw).expanduser() if override_raw else blank_default
         if not blank.exists():
@@ -1951,7 +1948,7 @@ class MainWindow(QMainWindow):
         if which not in (1, 2, 3):
             return
 
-        empty = Path(__file__).resolve().parents[3] / "resources" / "Overlay_empty.png"
+        empty = resource_path("Overlay_empty.png")
         if not empty.exists():
             QMessageBox.warning(self, "Overlay", f"Missing empty overlay image: {empty}")
             return
