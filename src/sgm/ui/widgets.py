@@ -219,7 +219,10 @@ class ImageCard(QFrame):
 
     def set_controls_enabled(self, enabled: bool) -> None:
         # "Browse" should remain available whenever a game is selected.
-        self._btn_resize.setEnabled(enabled)
+        # If the Resize button is visible, it means the current image is the wrong
+        # resolution; allow resizing even if other edits are disabled (e.g. derived slots).
+        can_resize = enabled or (self._btn_resize.isVisible() and bool(self._folder and self._basename))
+        self._btn_resize.setEnabled(can_resize)
         self._btn_extra.setEnabled(enabled)
         self._btn_blank.setEnabled(enabled)
         self._btn_paste.setEnabled(enabled and self._spec.paste_enabled)
@@ -452,9 +455,63 @@ class ImageCard(QFrame):
             return
 
         self._on_changed()
+class OverlayCard(ImageCard):
+    MIME = "application/x-sgm-overlay-index"
+
+    def __init__(self, *, index: int, on_reorder, **kwargs):
+        self._index = index
+        self._on_reorder = on_reorder
+        super().__init__(**kwargs)
+        self.setAcceptDrops(True)
+        self._drag_start: QPoint | None = None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = event.position().toPoint()
+        return super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start is None:
+            return super().mouseMoveEvent(event)
+
+        if (event.position().toPoint() - self._drag_start).manhattanLength() < 8:
+            return super().mouseMoveEvent(event)
+
+        src = self._existing_path
+        if src is None or not src.exists():
+            return super().mouseMoveEvent(event)
+
+        mime = QMimeData()
+        mime.setData(self.MIME, str(self._index).encode("utf-8"))
+
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(self.MIME) or event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasFormat(self.MIME):
+            try:
+                other = int(bytes(event.mimeData().data(self.MIME)).decode("utf-8"))
+            except Exception:
+                event.ignore()
+                return
+
+            if other != self._index and self._on_reorder is not None:
+                self._on_reorder(other, self._index)
+            event.acceptProposedAction()
+            return
+
+        # file-system drop: treat like replace image
+        return super().dropEvent(event)
 
 
-class OverlayPrimaryCard(ImageCard):
+class OverlayPrimaryCard(OverlayCard):
     def dest_path(self) -> Path | None:
         if not self._folder or not self._basename:
             return None

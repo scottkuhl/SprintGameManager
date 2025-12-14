@@ -47,7 +47,7 @@ from sgm.image_ops import (
 from sgm.resources import resource_path, resources_dir
 from sgm.io_utils import RenameCollisionError, copy_file, plan_rename_for_game_files, rename_many, swap_files
 from sgm.scanner import scan_folder
-from sgm.ui.widgets import ImageCard, ImageSpec, OverlayPrimaryCard, SnapshotCard
+from sgm.ui.widgets import ImageCard, ImageSpec, OverlayCard, OverlayPrimaryCard, SnapshotCard
 
 
 ACCEPTED_ADD_EXTS = {".bin", ".int", ".rom", ".cfg", ".json", ".png"}
@@ -1259,6 +1259,8 @@ class MainWindow(QMainWindow):
         images_grid.addWidget(self._img_overlay_big, 1, 0)
 
         self._img_overlay1 = OverlayPrimaryCard(
+            index=1,
+            on_reorder=self._reorder_overlays,
             config=self._config,
             spec=ImageSpec(title="Overlay 1", expected=self._config.overlay_resolution, filename="{basename}_overlay.png"),
             on_changed=self._images_changed,
@@ -1277,7 +1279,9 @@ class MainWindow(QMainWindow):
         )
         images_grid.addWidget(self._img_overlay1, 1, 1)
 
-        self._img_overlay2 = ImageCard(
+        self._img_overlay2 = OverlayCard(
+            index=2,
+            on_reorder=self._reorder_overlays,
             config=self._config,
             spec=ImageSpec(title="Overlay 2", expected=self._config.overlay_resolution, filename="{basename}_overlay2.png"),
             on_changed=self._images_changed,
@@ -1296,7 +1300,9 @@ class MainWindow(QMainWindow):
         )
         images_grid.addWidget(self._img_overlay2, 1, 2)
 
-        self._img_overlay3 = ImageCard(
+        self._img_overlay3 = OverlayCard(
+            index=3,
+            on_reorder=self._reorder_overlays,
             config=self._config,
             spec=ImageSpec(title="Overlay 3", expected=self._config.overlay_resolution, filename="{basename}_overlay3.png"),
             on_changed=self._images_changed,
@@ -1458,42 +1464,9 @@ class MainWindow(QMainWindow):
         self._lbl_warnings.setText(f"Warnings: {self._count_selected_warnings(game)}")
 
     def _count_selected_warnings(self, game: GameAssets) -> int:
-        n = 0
-        if len(game.basename) > self._config.desired_max_base_file_length:
-            n += 1
-        if game.rom is None:
-            n += 1
-        if game.rom is not None and game.rom.suffix.lower() in {".int", ".bin"} and game.config is None:
-            n += 1
-        if game.metadata is None:
-            n += 1
-
-        # Images (always warn if missing)
-        if game.box is None:
-            n += 1
-        if game.overlay_big is None:
-            n += 1
-
-        if game.overlay is None and game.overlay1 is None:
-            n += 1
-        if game.overlay is not None and game.overlay1 is not None:
-            n += 1
-
-        if game.qrcode is None:
-            n += 1
-
-        # Box Small is always a tracked asset; derived mode just changes how it's produced.
-        if game.box_small is None:
-            n += 1
-
-        # Snapshot warnings governed by DesiredNumberOfSnaps
-        desired = self._config.desired_number_of_snaps
-        snaps = [game.snap1, game.snap2, game.snap3]
-        for i in range(desired):
-            if snaps[i] is None:
-                n += 1
-
-        return n
+        # Keep this in sync with analysis filters by using the same warning code generator.
+        # This also ensures resolution mismatches count as warnings.
+        return len(self._compute_warning_codes(game))
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -1557,7 +1530,6 @@ class MainWindow(QMainWindow):
 
         if self._config.use_box_image_for_box_small:
             # Derived mode: show current file if present but disable editing.
-            self._img_box_small.set_controls_enabled(False)
             bs_warn: list[str]
             bs_resize = False
             if game.box_small:
@@ -1572,6 +1544,7 @@ class MainWindow(QMainWindow):
                 warnings=bs_warn,
                 needs_resize=bs_resize,
             )
+            self._img_box_small.set_controls_enabled(False)
         else:
             self._img_box_small.set_controls_enabled(True)
 
@@ -1989,6 +1962,83 @@ class MainWindow(QMainWindow):
 
         def p(i: int) -> Path:
             return game.folder / f"{game.basename}_snap{i}.png"
+
+        a = p(src_index)
+        b = p(dst_index)
+
+        if a.exists() and b.exists():
+            try:
+                swap_files(a, b)
+            except Exception as e:
+                QMessageBox.warning(self, "Reorder failed", str(e))
+                return
+        elif a.exists() and not b.exists():
+            try:
+                a.rename(b)
+            except Exception as e:
+                QMessageBox.warning(self, "Reorder failed", str(e))
+                return
+        elif (not a.exists()) and b.exists():
+            try:
+                b.rename(a)
+            except Exception as e:
+                QMessageBox.warning(self, "Reorder failed", str(e))
+                return
+
+        self.refresh()
+
+    def _reorder_overlays(self, src_index: int, dst_index: int) -> None:
+        game = self._current_game()
+        if not game:
+            return
+
+        if src_index == dst_index:
+            return
+
+        if src_index not in (1, 2, 3) or dst_index not in (1, 2, 3):
+            return
+
+        folder = game.folder
+        base = game.basename
+
+        overlay = folder / f"{base}_overlay.png"
+        overlay1 = folder / f"{base}_overlay1.png"
+        overlay2 = folder / f"{base}_overlay2.png"
+        overlay3 = folder / f"{base}_overlay3.png"
+
+        # Only enable meaningful reorders when at least two overlay slots exist on disk.
+        existing = [p for p in (overlay, overlay1, overlay2, overlay3) if p.exists()]
+        if len(existing) < 2:
+            return
+
+        # Conflict case: ambiguous primary overlay; block reorder until user resolves.
+        if overlay.exists() and overlay1.exists():
+            QMessageBox.warning(
+                self,
+                "Reorder failed",
+                "Both _overlay.png and _overlay1.png exist. Resolve this conflict before reordering overlays.",
+            )
+            return
+
+        multi = overlay2.exists() or overlay3.exists()
+
+        # In multi-overlay mode, slot 1 should be _overlay1.png. If legacy _overlay.png exists,
+        # migrate it so slot 1 reorders are consistent.
+        if multi and overlay.exists() and (not overlay1.exists()):
+            try:
+                overlay.rename(overlay1)
+            except Exception as e:
+                QMessageBox.warning(self, "Reorder failed", f"Failed to rename {overlay.name} to {overlay1.name}: {e}")
+                return
+
+        def p(i: int) -> Path:
+            if i == 1:
+                if multi:
+                    return overlay1
+                return overlay if overlay.exists() else overlay1
+            if i == 2:
+                return overlay2
+            return overlay3
 
         a = p(src_index)
         b = p(dst_index)
