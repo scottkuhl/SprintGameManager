@@ -30,7 +30,7 @@ class Resolution:
 @dataclass
 class AppConfig:
     last_game_folder: str = "none"
-    desired_max_base_file_length: int = 30
+    desired_max_base_file_length: int = 35
     desired_number_of_snaps: int = 2
 
     box_resolution: Resolution = Resolution(186, 256)

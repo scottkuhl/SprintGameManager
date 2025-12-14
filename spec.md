@@ -27,7 +27,7 @@ A game is included in the list if the folder contains at least one of the above 
 The application reads an ASCII configuration file on startup (located in current working directory). Defaults are applied if keys are missing. On successful browse, `LastGameFolder` is set.
 
 - **LastGameFolder:** Path to the last browsed game folder. Default: `none`
-- **DesiredMaxBaseFileLength:** Maximum basename length for warning. Default: `30`
+- **DesiredMaxBaseFileLength:** Maximum basename length for warning. Default: `35`
 - **DesiredNumberOfSnaps:** Desired snapshots count (0–3). Default: `2`
 - **BoxResolution:** Expected resolution for `<basename>.png`. Default: `186x256`
 - **BoxSmallResolution:** Expected resolution for `<basename>_small.png`. Default: `148x204`
@@ -42,7 +42,7 @@ If this application configuration does not exist on startup, it should be create
 
 ```ini
 LastGameFolder=none
-DesiredMaxBaseFileLength=30
+DesiredMaxBaseFileLength=35
 DesiredNumberOfSnaps=2
 BoxResolution=186x256
 BoxSmallResolution=148x204

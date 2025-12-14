@@ -48,6 +48,7 @@ from sgm.resources import resource_path, resources_dir
 from sgm.io_utils import RenameCollisionError, copy_file, plan_rename_for_game_files, rename_many, swap_files
 from sgm.scanner import scan_folder
 from sgm.ui.widgets import ImageCard, ImageSpec, OverlayCard, OverlayPrimaryCard, SnapshotCard
+from sgm.version import main_window_title
 
 
 ACCEPTED_ADD_EXTS = {".bin", ".int", ".rom", ".cfg", ".json", ".png"}
@@ -848,7 +849,7 @@ class MainWindow(QMainWindow):
         self._list_panel: QWidget | None = None
         self._filters_scroll: QScrollArea | None = None
 
-        self.setWindowTitle("Sprint Game Manager")
+        self.setWindowTitle(main_window_title())
         self.setAcceptDrops(True)
 
         root = QWidget()

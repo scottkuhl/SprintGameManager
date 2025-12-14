@@ -32,6 +32,9 @@ build/
 .coverage.*
 htmlcov/
 
+# Generated at build time
+src/sgm/_build.py
+
 # Temp/backup files
 *.tmp
 *.bak

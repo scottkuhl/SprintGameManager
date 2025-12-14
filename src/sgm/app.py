@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 from sgm.config import AppConfig
 from sgm.resources import resource_path
 from sgm.ui.main_window import MainWindow
+from sgm.version import APP_NAME
 
 
 def main() -> int:
@@ -20,7 +21,7 @@ def main() -> int:
             os.environ["QT_QPA_FONTDIR"] = str(fonts_dir)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Sprint Game Manager")
+    app.setApplicationName(APP_NAME)
 
     icon_path = resource_path("icon.ico")
     if icon_path.exists():
