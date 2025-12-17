@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QFrame,
     QScrollArea,
@@ -236,6 +238,18 @@ class ThinFileRow(QWidget):
 
 class MetadataEditor(QWidget):
     LANGS = ["en", "fr", "es", "de", "it"]
+    _KNOWN_TOP_LEVEL_KEYS = {"name", "nb_players", "editor", "year", "description"}
+
+    @staticmethod
+    def _desc_for_ui(value) -> str:
+        if value is None:
+            return ""
+        s = str(value)
+        return "" if s.strip() == "" else s
+
+    @staticmethod
+    def _desc_for_json(value: str) -> str:
+        return " " if value.strip() == "" else value
 
     def __init__(self, *, on_saved, metadata_editors: list[str] | None = None):
         super().__init__()
@@ -246,6 +260,8 @@ class MetadataEditor(QWidget):
         self._basename: str | None = None
         self._path: Path | None = None
         self._dirty = False
+        self._raw_json: dict = {}
+        self._others_simple_widgets: dict[str, QWidget] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -298,7 +314,9 @@ class MetadataEditor(QWidget):
 
         self._year = QSpinBox()
         self._year.setRange(0, 9999)
-        self._year.setSpecialValueText("")
+        # Qt shows the numeric minimum when specialValueText is empty.
+        # Use a single space so year=0 displays as blank in the UI.
+        self._year.setSpecialValueText(" ")
         form.addRow("Year", self._year)
 
         fields_l.addLayout(form)
@@ -308,9 +326,17 @@ class MetadataEditor(QWidget):
         self._desc_edits: dict[str, QTextEdit] = {}
         for lang in self.LANGS:
             edit = QTextEdit()
+            edit.setAcceptRichText(False)
             self._desc_edits[lang] = edit
             self._desc_tabs.addTab(edit, lang)
         fields_l.addWidget(self._desc_tabs, 1)
+
+        self._others_group = QGroupBox("Others")
+        self._others_group.setVisible(False)
+        self._others_form = QFormLayout(self._others_group)
+        self._others_form.setContentsMargins(8, 8, 8, 8)
+        self._others_form.setSpacing(6)
+        fields_l.addWidget(self._others_group)
 
         layout.addWidget(self._fields, 1)
 
@@ -331,6 +357,8 @@ class MetadataEditor(QWidget):
         self._basename = basename
         self._path = path
         self._dirty = False
+        self._raw_json = {}
+        self._clear_others()
         self._btn_action.setEnabled(False)
 
         if not folder or not basename:
@@ -362,8 +390,65 @@ class MetadataEditor(QWidget):
         self._load(path)
 
     def _set_fields_enabled(self, enabled: bool) -> None:
-        for w in [self._name, self._nb_players, self._editor, self._year, self._desc_tabs]:
+        for w in [self._name, self._nb_players, self._editor, self._year, self._desc_tabs, self._others_group]:
             w.setEnabled(enabled)
+
+    def _clear_others(self) -> None:
+        self._others_simple_widgets.clear()
+        while self._others_form.rowCount() > 0:
+            self._others_form.removeRow(0)
+        self._others_group.setVisible(False)
+
+    def _rebuild_others_from_raw(self) -> None:
+        self._clear_others()
+        if not isinstance(self._raw_json, dict):
+            return
+
+        extras = {k: v for k, v in self._raw_json.items() if k not in self._KNOWN_TOP_LEVEL_KEYS}
+        if not extras:
+            return
+
+        for key in sorted(extras.keys(), key=lambda s: str(s).casefold()):
+            value = extras[key]
+
+            # Editable simple types
+            if isinstance(value, bool):
+                w = QCheckBox()
+                w.setChecked(bool(value))
+                w.stateChanged.connect(self._mark_dirty)
+                self._others_simple_widgets[str(key)] = w
+                self._others_form.addRow(str(key), w)
+                continue
+
+            if isinstance(value, int) and not isinstance(value, bool):
+                w = QSpinBox()
+                w.setRange(-2147483648, 2147483647)
+                w.setSpecialValueText(" ")
+                w.setValue(int(value))
+                w.valueChanged.connect(self._mark_dirty)
+                self._others_simple_widgets[str(key)] = w
+                self._others_form.addRow(str(key), w)
+                continue
+
+            if isinstance(value, str):
+                w = QLineEdit()
+                w.setText(value)
+                w.textChanged.connect(self._mark_dirty)
+                self._others_simple_widgets[str(key)] = w
+                self._others_form.addRow(str(key), w)
+                continue
+
+            # Complex values: show read-only text; do not allow editing.
+            w = QPlainTextEdit()
+            w.setReadOnly(True)
+            try:
+                w.setPlainText(json.dumps(value, ensure_ascii=False, indent=2))
+            except Exception:
+                w.setPlainText(str(value))
+            w.setMinimumHeight(60)
+            self._others_form.addRow(str(key), w)
+
+        self._others_group.setVisible(True)
 
     def _set_defaults(self, basename: str) -> None:
         self._name.setText(basename)
@@ -378,6 +463,12 @@ class MetadataEditor(QWidget):
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             data = {}
+
+        if not isinstance(data, dict):
+            data = {}
+
+        # Keep a copy of the raw JSON so we can preserve unknown keys on save.
+        self._raw_json = dict(data)
 
         blockers = [
             QSignalBlocker(self._name),
@@ -409,7 +500,9 @@ class MetadataEditor(QWidget):
         if not isinstance(desc, dict):
             desc = {}
         for lang in self.LANGS:
-            self._desc_edits[lang].setPlainText(str(desc.get(lang, "")))
+            self._desc_edits[lang].setPlainText(self._desc_for_ui(desc.get(lang, "")))
+
+        self._rebuild_others_from_raw()
 
         self._dirty = False
         self._btn_action.setEnabled(False)
@@ -452,7 +545,7 @@ class MetadataEditor(QWidget):
             "nb_players": 0,
             "editor": "",
             "year": 0,
-            "description": {lang: "" for lang in self.LANGS},
+            "description": {lang: " " for lang in self.LANGS},
         }
         try:
             path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -477,13 +570,31 @@ class MetadataEditor(QWidget):
         if not self._dirty:
             return True
 
-        data = {
-            "name": self._name.text().strip(),
-            "nb_players": int(self._nb_players.value()),
-            "editor": self._editor.currentText().strip(),
-            "year": int(self._year.value()),
-            "description": {lang: self._desc_edits[lang].toPlainText() for lang in self.LANGS},
-        }
+        # Preserve unknown keys by starting from the last loaded JSON.
+        data: dict = dict(self._raw_json) if isinstance(self._raw_json, dict) else {}
+        data["name"] = self._name.text().strip()
+        data["nb_players"] = int(self._nb_players.value())
+        data["editor"] = self._editor.currentText().strip()
+        data["year"] = int(self._year.value())
+
+        existing_desc = data.get("description")
+        desc_out: dict = dict(existing_desc) if isinstance(existing_desc, dict) else {}
+        for lang in self.LANGS:
+            desc_out[lang] = self._desc_for_json(self._desc_edits[lang].toPlainText())
+        data["description"] = desc_out
+
+        # Apply user edits for simple "Others" fields.
+        for key, w in self._others_simple_widgets.items():
+            try:
+                if isinstance(w, QLineEdit):
+                    data[key] = w.text()
+                elif isinstance(w, QCheckBox):
+                    data[key] = bool(w.isChecked())
+                elif isinstance(w, QSpinBox):
+                    data[key] = int(w.value())
+            except Exception:
+                # If a widget can't be read for some reason, leave the original value intact.
+                pass
 
         try:
             self._path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -491,6 +602,7 @@ class MetadataEditor(QWidget):
             QMessageBox.warning(self, "Save failed", str(e))
             return False
 
+        self._raw_json = dict(data)
         self._dirty = False
         self._btn_action.setEnabled(False)
         self._on_saved()
