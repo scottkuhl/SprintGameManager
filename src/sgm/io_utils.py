@@ -57,8 +57,13 @@ def rename_many(moves: list[tuple[Path, Path]]) -> None:
     for src, tmp in tmp_moves:
         src.rename(tmp)
 
+    # zip(..., strict=True) was added in Python 3.10. Use an explicit
+    # length check for compatibility with older Pythons (mac may run 3.9).
+    if len(moves) != len(tmp_moves):
+        raise RuntimeError("Internal error: moves and tmp_moves length mismatch")
+
     tmp_to_final = []
-    for (_, dst), (_, tmp) in zip(moves, tmp_moves, strict=True):
+    for ( _, dst), ( _, tmp) in zip(moves, tmp_moves):
         tmp_to_final.append((tmp, dst))
 
     for tmp, dst in tmp_to_final:
