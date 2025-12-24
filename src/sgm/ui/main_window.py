@@ -2152,6 +2152,7 @@ class MainWindow(QMainWindow):
 
                 def do_refresh() -> None:
                     try:
+                        QApplication.processEvents()
                         self.refresh()
                         if self._folder is not None:
                             try:
@@ -2167,7 +2168,7 @@ class MainWindow(QMainWindow):
                     finally:
                         self._force_expand_folder_paths = set()
 
-                QTimer.singleShot(0, do_refresh)
+                QTimer.singleShot(300, do_refresh)
                 return
 
             # Batch move (existing helper).
@@ -2269,13 +2270,14 @@ class MainWindow(QMainWindow):
 
             def do_refresh() -> None:
                 try:
+                    QApplication.processEvents()
                     self.refresh()
                     self._current = f"f:{str(new_dir)}"
                     self._set_current_in_tree(self._current, silent=False)
                 finally:
                     self._force_expand_folder_paths = set()
 
-            QTimer.singleShot(0, do_refresh)
+            QTimer.singleShot(300, do_refresh)
             return
 
         # Game move
@@ -2360,6 +2362,7 @@ class MainWindow(QMainWindow):
             sel = self._post_move_select_id
             self._post_move_select_id = None
             try:
+                QApplication.processEvents()
                 self.refresh()
                 if sel:
                     self._current = sel
@@ -2367,7 +2370,7 @@ class MainWindow(QMainWindow):
             finally:
                 self._force_expand_folder_paths = set()
 
-        QTimer.singleShot(0, do_refresh)
+        QTimer.singleShot(300, do_refresh)
 
     def _move_games_to_folder(self, game_ids: list[str], dest_folder: Path) -> None:
         # Batch move used by multi-select drag/drop.
@@ -2424,6 +2427,7 @@ class MainWindow(QMainWindow):
 
         def do_refresh() -> None:
             try:
+                QApplication.processEvents()
                 self.refresh()
                 # Select destination folder (root has no visible folder node).
                 if self._folder is not None:
@@ -2440,7 +2444,7 @@ class MainWindow(QMainWindow):
             finally:
                 self._force_expand_folder_paths = set()
 
-        QTimer.singleShot(0, do_refresh)
+        QTimer.singleShot(300, do_refresh)
 
     def _init_analyze_filters(self) -> None:
         # Stable filter list so users can toggle specific warnings (e.g., missing overlay).
