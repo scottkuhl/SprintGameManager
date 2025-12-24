@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 from sgm.scanner import _classify
+from sgm.sprint_fs import sprint_path_key
 
 
 class RenameCollisionError(RuntimeError):
@@ -81,11 +82,19 @@ def rename_many(moves: list[tuple[Path, Path]]) -> None:
     if not moves:
         return
 
-    srcs = {s.resolve() for s, _ in moves}
+    src_keys = {sprint_path_key(s) for s, _ in moves}
+
+    # Detect duplicate destinations within the move set.
+    seen_dest_keys: set[str] = set()
+    for _, dst in moves:
+        key = sprint_path_key(dst)
+        if key in seen_dest_keys:
+            raise RenameCollisionError(f"Multiple moves would collide at: {dst}")
+        seen_dest_keys.add(key)
 
     # Detect collisions with existing files not part of the rename set.
     for _, dst in moves:
-        if dst.exists() and dst.resolve() not in srcs:
+        if dst.exists() and sprint_path_key(dst) not in src_keys:
             raise RenameCollisionError(f"Destination already exists: {dst}")
 
     # Use temporary unique names to handle swaps.

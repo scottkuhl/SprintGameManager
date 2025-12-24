@@ -30,6 +30,7 @@ class Resolution:
 @dataclass
 class AppConfig:
     last_game_folder: str = "none"
+    language: str = "en"
     desired_max_base_file_length: int = 35
     desired_number_of_snaps: int = 2
 
@@ -96,6 +97,10 @@ class AppConfig:
 
         cfg.last_game_folder = data.get("LastGameFolder", cfg.last_game_folder)
 
+        lang = (data.get("Language", cfg.language) or "").strip().lower()
+        # Supported description languages.
+        cfg.language = lang if lang in {"en", "fr", "es", "de", "it"} else "en"
+
         cfg.desired_max_base_file_length = _parse_int(
             data.get("DesiredMaxBaseFileLength"), default=cfg.desired_max_base_file_length
         )
@@ -156,6 +161,7 @@ class AppConfig:
         editors_clean_sorted = sorted(editors_clean, key=lambda s: s.casefold())
         lines = [
             "LastGameFolder=" + (self.last_game_folder or "none"),
+            f"Language={(self.language or 'en').strip().lower() or 'en'}",
             f"DesiredMaxBaseFileLength={int(self.desired_max_base_file_length)}",
             f"DesiredNumberOfSnaps={int(self.desired_number_of_snaps)}",
             f"BoxResolution={self.box_resolution.to_string()}",

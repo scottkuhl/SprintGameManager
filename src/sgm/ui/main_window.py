@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import os
 
-from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QIcon, QPalette
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QBrush, QColor, QIcon, QPalette, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressDialog,
     QPushButton,
     QFrame,
     QScrollArea,
@@ -71,6 +73,7 @@ from sgm.ui.advanced_json_dialog import AdvancedJsonDialog
 from sgm.ui.widgets import ImageCard, ImageSpec, OverlayCard, OverlayPrimaryCard, SnapshotCard
 from sgm.ui.dialog_state import get_start_dir, remember_path
 from sgm.version import main_window_title
+from sgm.sprint_fs import sprint_name_key, sprint_path_key
 
 
 ACCEPTED_ADD_EXTS = {".bin", ".int", ".rom", ".cfg", ".json", ".png"}
@@ -611,11 +614,21 @@ class MetadataEditor(QWidget):
     def _desc_for_json(value: str) -> str:
         return " " if value.strip() == "" else value
 
-    def __init__(self, *, on_saved, on_advanced=None, metadata_editors: list[str] | None = None):
+    def __init__(
+        self,
+        *,
+        on_saved,
+        on_advanced=None,
+        metadata_editors: list[str] | None = None,
+        preferred_language: str = "en",
+    ):
         super().__init__()
         self._on_saved = on_saved
         self._on_advanced = on_advanced
         self._metadata_editors = list(metadata_editors or [])
+        self._preferred_language = (preferred_language or "en").strip().lower() or "en"
+        if self._preferred_language not in self.LANGS:
+            self._preferred_language = "en"
 
         self._folder: Path | None = None
         self._basename: str | None = None
@@ -689,6 +702,14 @@ class MetadataEditor(QWidget):
             edit.setAcceptRichText(False)
             self._desc_edits[lang] = edit
             self._desc_tabs.addTab(edit, lang)
+
+        # Set the initial Description tab once based on config Language.
+        # After that, we do not auto-change it when navigating; the user's
+        # tab choice remains active until they pick a different tab.
+        try:
+            self._desc_tabs.setCurrentIndex(self.LANGS.index(self._preferred_language))
+        except Exception:
+            self._desc_tabs.setCurrentIndex(0)
         fields_l.addWidget(self._desc_tabs, 1)
 
         adv_row = QHBoxLayout()
@@ -738,6 +759,7 @@ class MetadataEditor(QWidget):
         self._btn_action.setEnabled(False)
         self._btn_advanced.setEnabled(False)
         self._btn_advanced.setVisible(bool(allow_advanced))
+
 
         if not folder or not basename:
             self._warning.setText("")
@@ -1578,6 +1600,7 @@ class MainWindow(QMainWindow):
 
         self._analysis_enabled: bool = False
         self._analysis_by_game: dict[str, set[str]] = {}
+        self._analysis_include_json_checks: bool = False
         self._filter_checks: dict[str, QCheckBox] = {}
         self._list_panel: QWidget | None = None
         self._filters_scroll: QScrollArea | None = None
@@ -1585,6 +1608,8 @@ class MainWindow(QMainWindow):
         self._force_expand_folder_paths: set[str] = set()
         self._post_move_select_id: str | None = None
         self._has_any_folders: bool = False
+
+        self._multi_selected_game_ids: list[str] = []
 
         self.setWindowTitle(main_window_title())
         self.setAcceptDrops(True)
@@ -1646,6 +1671,16 @@ class MainWindow(QMainWindow):
         self._lbl_warnings = QLabel("Warnings: 0")
         top.addWidget(self._lbl_warnings)
 
+        self._btn_open_ini = QToolButton()
+        self._btn_open_ini.setToolTip("Open sgm.ini in default editor")
+        self._btn_open_ini.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._btn_open_ini.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self._btn_open_ini.setFixedSize(btn_size)
+        self._btn_open_ini.setIconSize(icon_size)
+        self._btn_open_ini.setStyleSheet("QToolButton { padding: 0px; }")
+        self._btn_open_ini.clicked.connect(self._open_ini_clicked)
+        top.addWidget(self._btn_open_ini)
+
         root_layout.addLayout(top)
 
         # Main split
@@ -1678,10 +1713,22 @@ class MainWindow(QMainWindow):
         row.addWidget(lbl)
         row.addStretch(1)
         self._btn_analyze = QPushButton("Analyze")
+        self._btn_analyze.setToolTip(
+            "Scan games and compute warnings so you can filter the games list. "
+            "Optionally enable 'Include JSON Checks' to validate JSON metadata and referenced files (may take time)."
+        )
         self._btn_analyze.setMaximumHeight(24)
         self._btn_analyze.clicked.connect(self._analyze_folder)
         row.addWidget(self._btn_analyze)
         analyze_l.addLayout(row)
+
+        self._chk_include_json_checks = QCheckBox("Include JSON Checks")
+        self._chk_include_json_checks.setChecked(False)
+        self._chk_include_json_checks.setToolTip(
+            "When enabled, Analyze also inspects each game's JSON metadata (name, players, editor, year, description, "
+            "and jzintv_extra file references). This can take time to perform."
+        )
+        analyze_l.addWidget(self._chk_include_json_checks)
 
         self._lbl_analyze = QLabel("")
         self._lbl_analyze.setVisible(False)
@@ -1824,6 +1871,16 @@ class MainWindow(QMainWindow):
         self._reset_analysis_state()
         self.refresh()
 
+    def _open_ini_clicked(self) -> None:
+        try:
+            ini_path = self._config_path
+            if not ini_path or not ini_path.exists():
+                QMessageBox.warning(self, "Open sgm.ini", f"Config file not found:\n{ini_path}")
+                return
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(ini_path)))
+        except Exception as e:
+            QMessageBox.warning(self, "Open sgm.ini", str(e))
+
     def _reset_analysis_state(self) -> None:
         self._analysis_enabled = False
         self._analysis_by_game = {}
@@ -1854,7 +1911,10 @@ class MainWindow(QMainWindow):
         self._keyboard_files = list(scan.keyboard_files)
 
         if self._analysis_enabled:
-            self._analysis_by_game = {b: self._compute_warning_codes(g) for b, g in self._games.items()}
+            self._analysis_by_game = {
+                b: self._compute_warning_codes(g, include_json_checks=self._analysis_include_json_checks)
+                for b, g in self._games.items()
+            }
             self._update_filter_visibility()
 
         self._rebuild_game_list(preserve=self._current)
@@ -1957,12 +2017,12 @@ class MainWindow(QMainWindow):
 
         # Prevent creating a folder that collides with an existing game basename
         # in the same parent folder.
-        parent_norm = os.path.normcase(os.path.abspath(str(parent_dir)))
-        name_cmp = name.casefold() if os.name == "nt" else name
+        parent_key = sprint_path_key(parent_dir)
+        name_key = sprint_name_key(name)
         for game in self._games.values():
-            game_parent_norm = os.path.normcase(os.path.abspath(str(game.folder)))
-            game_base_cmp = game.basename.casefold() if os.name == "nt" else game.basename
-            if game_parent_norm == parent_norm and game_base_cmp == name_cmp:
+            game_parent_key = sprint_path_key(game.folder)
+            game_base_key = sprint_name_key(game.basename)
+            if game_parent_key == parent_key and game_base_key == name_key:
                 example = None
                 try:
                     paths = game.all_paths()
@@ -2012,6 +2072,106 @@ class MainWindow(QMainWindow):
             return
         sel = self._current_selection()
         if sel is None:
+            # Multi-select: only supported for games (not folders).
+            game_ids = list(self._multi_selected_game_ids or [])
+            if not game_ids:
+                return
+            if not self._has_any_folders:
+                return
+
+            first_game = self._games.get(game_ids[0])
+            current_folder = first_game.folder if first_game is not None else self._folder
+            dlg = MoveGameDialog(
+                parent=self,
+                root_folder=self._folder,
+                current_folder=current_folder,
+                title="Move Selected Games",
+                allow_copy=True,
+            )
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            dest = dlg.selected_folder()
+            if dest is None:
+                return
+
+            make_copy = dlg.make_copy()
+            if make_copy:
+                # Batch copy.
+                dest.mkdir(parents=True, exist_ok=True)
+
+                # Preserve order but de-duplicate.
+                ordered: list[str] = []
+                seen: set[str] = set()
+                for gid in game_ids:
+                    g = str(gid or "").strip()
+                    if not g or g in seen:
+                        continue
+                    seen.add(g)
+                    ordered.append(g)
+
+                moves: list[tuple[Path, Path]] = []
+                for gid in ordered:
+                    game = self._games.get(gid)
+                    if not game:
+                        continue
+                    try:
+                        if sprint_path_key(game.folder) == sprint_path_key(dest):
+                            continue
+                    except Exception:
+                        continue
+
+                    moves.extend(plan_move_game_files(game.folder, dest, game.basename))
+
+                if not moves:
+                    return
+
+                # Detect duplicate destinations among the copy set.
+                seen_dests: set[str] = set()
+                for _, dst in moves:
+                    key = sprint_path_key(dst)
+                    if key in seen_dests:
+                        QMessageBox.warning(self, "Copy blocked", f"Multiple selected games would collide at: {dst}")
+                        return
+                    seen_dests.add(key)
+
+                # Ensure no destination already exists.
+                for _, dst in moves:
+                    if dst.exists():
+                        QMessageBox.warning(self, "Copy blocked", f"Destination already exists: {dst}")
+                        return
+
+                try:
+                    for src, dst in moves:
+                        copy_file(src, dst, overwrite=False)
+                except Exception as e:
+                    QMessageBox.warning(self, "Copy failed", str(e))
+                    return
+
+                # Expand destination folder and refresh once.
+                self._force_expand_folder_paths = {str(dest)}
+
+                def do_refresh() -> None:
+                    try:
+                        self.refresh()
+                        if self._folder is not None:
+                            try:
+                                is_root = sprint_path_key(dest) == sprint_path_key(self._folder)
+                            except Exception:
+                                is_root = str(dest) == str(self._folder)
+                            if not is_root:
+                                self._current = f"f:{str(dest)}"
+                                self._set_current_in_tree(self._current, silent=False)
+                            else:
+                                self._tree.clearSelection()
+                                self._select_none()
+                    finally:
+                        self._force_expand_folder_paths = set()
+
+                QTimer.singleShot(0, do_refresh)
+                return
+
+            # Batch move (existing helper).
+            self._move_games_to_folder(game_ids, dest)
             return
         kind, val = sel
         if kind == "folder":
@@ -2033,7 +2193,7 @@ class MainWindow(QMainWindow):
                 return
 
             try:
-                if dest_parent.resolve() == folder_dir.parent.resolve():
+                if sprint_path_key(dest_parent) == sprint_path_key(folder_dir.parent):
                     QMessageBox.information(self, "Move Folder", "Folder is already in the selected folder.")
                     return
             except Exception:
@@ -2042,30 +2202,19 @@ class MainWindow(QMainWindow):
                     return
 
             # Prevent moving a folder into itself (or into one of its descendants).
-            try:
-                src_res = folder_dir.resolve()
-                dst_res = dest_parent.resolve()
-                if dst_res == src_res or dst_res.is_relative_to(src_res):
-                    QMessageBox.warning(self, "Move Folder", "Cannot move a folder into itself (or into one of its subfolders).")
-                    return
-            except Exception:
-                # Best-effort fallback using string prefix.
-                try:
-                    src_s = str(folder_dir.resolve())
-                    dst_s = str(dest_parent.resolve())
-                    if dst_s == src_s or dst_s.startswith(src_s + os.sep):
-                        QMessageBox.warning(self, "Move Folder", "Cannot move a folder into itself (or into one of its subfolders).")
-                        return
-                except Exception:
-                    pass
+            src_key = sprint_path_key(folder_dir).rstrip("/")
+            dst_key = sprint_path_key(dest_parent).rstrip("/")
+            if dst_key == src_key or dst_key.startswith(src_key + "/"):
+                QMessageBox.warning(self, "Move Folder", "Cannot move a folder into itself (or into one of its subfolders).")
+                return
 
             # Prevent destination parent from containing a game with the same basename.
-            parent_norm = os.path.normcase(os.path.abspath(str(dest_parent)))
-            base_cmp = folder_dir.name.casefold() if os.name == "nt" else folder_dir.name
+            parent_key = sprint_path_key(dest_parent)
+            base_key = sprint_name_key(folder_dir.name)
             for game in self._games.values():
-                game_parent_norm = os.path.normcase(os.path.abspath(str(game.folder)))
-                game_base_cmp = game.basename.casefold() if os.name == "nt" else game.basename
-                if game_parent_norm == parent_norm and game_base_cmp == base_cmp:
+                game_parent_key = sprint_path_key(game.folder)
+                game_base_key = sprint_name_key(game.basename)
+                if game_parent_key == parent_key and game_base_key == base_key:
                     example = None
                     try:
                         paths = game.all_paths()
@@ -2179,7 +2328,7 @@ class MainWindow(QMainWindow):
         game = self._games.get(game_id)
         if not game:
             return
-        if game.folder.resolve() == dest_folder.resolve():
+        if sprint_path_key(game.folder) == sprint_path_key(dest_folder):
             return
 
         dest_folder.mkdir(parents=True, exist_ok=True)
@@ -2241,11 +2390,10 @@ class MainWindow(QMainWindow):
             if not game:
                 continue
             try:
-                if game.folder.resolve() == dest_folder.resolve():
+                if sprint_path_key(game.folder) == sprint_path_key(dest_folder):
                     continue
             except Exception:
-                if str(game.folder) == str(dest_folder):
-                    continue
+                continue
 
             dest_folder.mkdir(parents=True, exist_ok=True)
             moves.extend(plan_move_game_files(game.folder, dest_folder, game.basename))
@@ -2256,7 +2404,7 @@ class MainWindow(QMainWindow):
         # Detect duplicate destinations among the move set (rename_many doesn't).
         seen_dests: set[str] = set()
         for _, dst in moves:
-            key = os.path.normcase(os.path.abspath(str(dst)))
+            key = sprint_path_key(dst)
             if key in seen_dests:
                 QMessageBox.warning(self, "Move blocked", f"Multiple selected games would collide at: {dst}")
                 return
@@ -2280,7 +2428,7 @@ class MainWindow(QMainWindow):
                 # Select destination folder (root has no visible folder node).
                 if self._folder is not None:
                     try:
-                        is_root = dest_folder.resolve() == self._folder.resolve()
+                        is_root = sprint_path_key(dest_folder) == sprint_path_key(self._folder)
                     except Exception:
                         is_root = str(dest_folder) == str(self._folder)
                     if not is_root:
@@ -2319,6 +2467,13 @@ class MainWindow(QMainWindow):
             ("resolution:snap1", "Wrong Snap 1 resolution"),
             ("resolution:snap2", "Wrong Snap 2 resolution"),
             ("resolution:snap3", "Wrong Snap 3 resolution"),
+            ("json:empty:name", "JSON: Empty Name"),
+            ("json:empty:nb_players", "JSON: Empty nb_players"),
+            ("json:empty:editor", "JSON: Empty Editor"),
+            ("json:empty:year", "JSON: Empty/0 Year"),
+            ("json:empty:description", f"JSON: Empty Description ({getattr(self._config, 'language', 'en')})"),
+            ("json:missing:kbdhackfile", "JSON: Missing kbdhackfile"),
+            ("json:missing:gfx-palette", "JSON: Missing gfx-palette"),
         ]
 
         for code, label in ordered:
@@ -2333,8 +2488,32 @@ class MainWindow(QMainWindow):
         if not self._folder:
             return
 
-        self._analysis_enabled = True
-        self._analysis_by_game = {b: self._compute_warning_codes(g) for b, g in self._games.items()}
+        busy = QProgressDialog("Analyzing...", None, 0, 0, self)
+        busy.setWindowTitle("Analyze")
+        busy.setWindowModality(Qt.WindowModality.ApplicationModal)
+        busy.setCancelButton(None)
+        busy.setMinimumDuration(0)
+        busy.show()
+        QApplication.processEvents()
+
+        try:
+            self._analysis_enabled = True
+            self._analysis_include_json_checks = bool(self._chk_include_json_checks.isChecked())
+            self._analysis_by_game = {
+                b: self._compute_warning_codes(g, include_json_checks=self._analysis_include_json_checks)
+                for b, g in self._games.items()
+            }
+        except Exception as e:
+            # Qt can swallow exceptions in slots; show a visible error.
+            QMessageBox.warning(self, "Analyze failed", str(e))
+            self._analysis_enabled = False
+            self._analysis_by_game = {}
+            return
+        finally:
+            try:
+                busy.close()
+            except Exception:
+                pass
 
         total = len(self._analysis_by_game)
         with_w = sum(1 for s in self._analysis_by_game.values() if s)
@@ -2528,7 +2707,13 @@ class MainWindow(QMainWindow):
         # Always show total games across all folders/subfolders.
         self._lbl_game_count.setText(f"Games: {max(0, total)}")
 
-    def _compute_warning_codes(self, game: GameAssets, *, include_rom_cfg: bool = True) -> set[str]:
+    def _compute_warning_codes(
+        self,
+        game: GameAssets,
+        *,
+        include_rom_cfg: bool = True,
+        include_json_checks: bool = False,
+    ) -> set[str]:
         codes: set[str] = set()
 
         if len(game.basename) > self._config.desired_max_base_file_length:
@@ -2543,6 +2728,68 @@ class MainWindow(QMainWindow):
 
         if game.metadata is None:
             codes.add("missing:metadata")
+
+        def _is_blank(value) -> bool:
+            if value is None:
+                return True
+            if isinstance(value, str):
+                return value.strip() == ""
+            return False
+
+        def _strip_wrapping_quotes(s: str) -> str:
+            s = (s or "").strip()
+            if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+                return s[1:-1]
+            return s
+
+        def _split_flags(value: str) -> list[str]:
+            s = (value or "").strip()
+            if not s:
+                return []
+            try:
+                return shlex.split(s, posix=True)
+            except Exception:
+                return [t for t in s.split(" ") if t.strip()]
+
+        def _find_equals_flag_value(tokens: list[str], flag_prefix: str) -> str | None:
+            for t in tokens:
+                if t.startswith(flag_prefix):
+                    return t[len(flag_prefix) :]
+            return None
+
+        def _normalize_media_prefix(prefix: str | None) -> str:
+            s = (prefix or "").strip() or "/media/usb0"
+            s = s.rstrip("/")
+            return s or "/media/usb0"
+
+        def _device_to_local_path(*, root: Path, device_path: str, media_prefix: str) -> Path | None:
+            s = _strip_wrapping_quotes(device_path)
+            prefix = _normalize_media_prefix(media_prefix)
+            if s == prefix:
+                return root
+            if s.startswith(prefix + "/"):
+                rel = s[len(prefix) + 1 :]
+                if rel:
+                    return root / Path(PurePosixPath(rel))
+                return root
+            return None
+
+        def _exists_for_flag_path(flag_value: str) -> bool:
+            root = self._folder or game.folder
+            local = _device_to_local_path(
+                root=root,
+                device_path=flag_value,
+                media_prefix=getattr(self._config, "jzintv_media_prefix", "/media/usb0"),
+            )
+            if local is not None:
+                try:
+                    return local.exists()
+                except Exception:
+                    return False
+            try:
+                return Path(_strip_wrapping_quotes(flag_value)).exists()
+            except Exception:
+                return False
 
         def add_image(kind: str, p: Path | None, expected) -> None:
             if p is None:
@@ -2581,6 +2828,64 @@ class MainWindow(QMainWindow):
         for idx, p in snaps:
             if idx <= desired:
                 add_image(f"snap{idx}", p, self._config.snap_resolution)
+
+        if include_json_checks and game.metadata is not None and game.metadata.exists():
+            try:
+                data = json.loads(game.metadata.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
+
+            if _is_blank(data.get("name")):
+                codes.add("json:empty:name")
+
+            nb = data.get("nb_players")
+            nb_str = "" if nb is None else str(nb)
+            if _is_blank(nb) or nb_str.strip() == "0":
+                codes.add("json:empty:nb_players")
+            else:
+                try:
+                    if int(nb_str.strip()) == 0:
+                        codes.add("json:empty:nb_players")
+                except Exception:
+                    pass
+
+            if _is_blank(data.get("editor")):
+                codes.add("json:empty:editor")
+
+            yr = data.get("year")
+            if yr is None:
+                codes.add("json:empty:year")
+            else:
+                try:
+                    if int(str(yr).strip() or "0") == 0:
+                        codes.add("json:empty:year")
+                except Exception:
+                    codes.add("json:empty:year")
+
+            desc = data.get("description")
+            lang = (getattr(self._config, "language", "en") or "en").strip().lower() or "en"
+            if not isinstance(desc, dict):
+                codes.add("json:empty:description")
+            else:
+                if _is_blank(desc.get(lang)):
+                    codes.add("json:empty:description")
+
+            extra = data.get("jzintv_extra")
+            extra_s = ("" if extra is None else str(extra)).strip()
+            if extra_s:
+                tokens = _split_flags(extra_s)
+
+                kbd = _find_equals_flag_value(tokens, "--kbdhackfile=")
+                if kbd is not None:
+                    if _is_blank(kbd) or not _exists_for_flag_path(kbd):
+                        codes.add("json:missing:kbdhackfile")
+
+                pal = _find_equals_flag_value(tokens, "--gfx-palette=")
+                if pal is not None:
+                    if _is_blank(pal) or not _exists_for_flag_path(pal):
+                        codes.add("json:missing:gfx-palette")
 
         return codes
 
@@ -2792,6 +3097,7 @@ class MainWindow(QMainWindow):
             on_saved=self.refresh,
             on_advanced=self._open_advanced_json,
             metadata_editors=self._config.metadata_editors,
+            preferred_language=getattr(self._config, "language", "en"),
         )
         right_l.addWidget(framed(self._meta_editor), 1)
 
@@ -2857,6 +3163,7 @@ class MainWindow(QMainWindow):
             _ = blocker
 
     def _select_game(self, basename: str) -> None:
+        self._multi_selected_game_ids = []
         game_id = (basename or "").strip()
         prev = self._current
         next_key = f"g:{game_id}" if game_id else None
@@ -2949,6 +3256,7 @@ class MainWindow(QMainWindow):
         self._lbl_warnings.setText(f"Warnings: {self._count_selected_warnings(game)}")
 
     def _select_folder(self, folder_path: str) -> None:
+        self._multi_selected_game_ids = []
         folder_dir = Path(folder_path)
         if not folder_dir.exists() or not folder_dir.is_dir():
             self._select_none()
@@ -3021,12 +3329,17 @@ class MainWindow(QMainWindow):
         # Multiple selection: do not show per-game details to avoid ambiguity.
         self._current = None
 
+        self._multi_selected_game_ids = []
+
         game_count = 0
         folder_count = 0
         for item in items or []:
             info = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
             if isinstance(info, dict) and info.get("type") == "game":
                 game_count += 1
+                gid = str(info.get("id") or "").strip()
+                if gid:
+                    self._multi_selected_game_ids.append(gid)
             elif isinstance(info, dict) and info.get("type") == "folder":
                 folder_count += 1
 
@@ -3046,8 +3359,14 @@ class MainWindow(QMainWindow):
         self._btn_rename.setToolTip("Rename this game's files (basename)")
 
         if hasattr(self, "_btn_move"):
-            self._btn_move.setVisible(False)
-            self._btn_move.setEnabled(False)
+            # Multi-select Move only supports games (no folders in selection).
+            allow_multi_game_move = bool(self._has_any_folders and game_count > 0 and folder_count == 0)
+            self._btn_move.setVisible(bool(self._has_any_folders))
+            self._btn_move.setEnabled(allow_multi_game_move)
+            if allow_multi_game_move:
+                self._btn_move.setToolTip("Move all selected games to a different folder (supports Make Copy)")
+            else:
+                self._btn_move.setToolTip("Multi-select Move supports games only (no folders in selection)")
 
         self._rom_row.set_context(folder=None, basename=None, existing=None, warning=None)
         self._cfg_row.set_context(folder=None, basename=None, existing=None, warning=None)
@@ -3060,6 +3379,7 @@ class MainWindow(QMainWindow):
 
     def _select_none(self) -> None:
         self._current = None
+        self._multi_selected_game_ids = []
         self._base_name.setText("")
         self._base_warn.setText("")
 
@@ -3366,7 +3686,7 @@ class MainWindow(QMainWindow):
                 return
 
             new_name = dlg.value().strip()
-            if not new_name or new_name == folder_dir.name:
+            if not new_name or sprint_name_key(new_name) == sprint_name_key(folder_dir.name):
                 return
 
             if any(c in new_name for c in "\\/:*?\"<>|"):
@@ -3377,12 +3697,12 @@ class MainWindow(QMainWindow):
 
             # Prevent renaming a folder to a name that collides with an existing game basename
             # in the same parent folder.
-            parent_norm = os.path.normcase(os.path.abspath(str(parent)))
-            name_cmp = new_name.casefold() if os.name == "nt" else new_name
+            parent_key = sprint_path_key(parent)
+            name_key = sprint_name_key(new_name)
             for game in self._games.values():
-                game_parent_norm = os.path.normcase(os.path.abspath(str(game.folder)))
-                game_base_cmp = game.basename.casefold() if os.name == "nt" else game.basename
-                if game_parent_norm == parent_norm and game_base_cmp == name_cmp:
+                game_parent_key = sprint_path_key(game.folder)
+                game_base_key = sprint_name_key(game.basename)
+                if game_parent_key == parent_key and game_base_key == name_key:
                     example = None
                     try:
                         paths = game.all_paths()
@@ -3436,7 +3756,7 @@ class MainWindow(QMainWindow):
             return
 
         new_base = dlg.value().strip()
-        if not new_base or new_base == game.basename:
+        if not new_base or sprint_name_key(new_base) == sprint_name_key(game.basename):
             return
 
         if any(c in new_base for c in "\\/:*?\"<>|"):
