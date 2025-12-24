@@ -45,6 +45,10 @@ class AppConfig:
 
     use_box_image_for_box_small: bool = True
 
+    # Used when building jzintv flags that reference files on the target device.
+    # Example output: --kbdhackfile="<prefix>/<relative_path>"
+    jzintv_media_prefix: str = "/media/usb0"
+
     metadata_editors: list[str] = None  # populated in defaults()
 
     @staticmethod
@@ -138,6 +142,8 @@ class AppConfig:
             data.get("UseBoxImageForBoxSmall"), default=cfg.use_box_image_for_box_small
         )
 
+        cfg.jzintv_media_prefix = (data.get("JzIntvMediaPrefix", cfg.jzintv_media_prefix) or "").strip() or "/media/usb0"
+
         cfg.metadata_editors = _parse_string_list(
             data.get("MetadataEditors"),
             default=cfg.metadata_editors,
@@ -162,6 +168,7 @@ class AppConfig:
             f"QrCodeResolution={self.qrcode_resolution.to_string()}",
             f"SnapResolution={self.snap_resolution.to_string()}",
             f"UseBoxImageForBoxSmall={'True' if self.use_box_image_for_box_small else 'False'}",
+            f"JzIntvMediaPrefix={(self.jzintv_media_prefix or '/media/usb0').strip()}",
             "MetadataEditors=" + "|".join(editors_clean_sorted),
         ]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")

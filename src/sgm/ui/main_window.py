@@ -67,6 +67,7 @@ from sgm.io_utils import (
     swap_files,
 )
 from sgm.scanner import _classify, scan_folder
+from sgm.ui.advanced_json_dialog import AdvancedJsonDialog
 from sgm.ui.widgets import ImageCard, ImageSpec, OverlayCard, OverlayPrimaryCard, SnapshotCard
 from sgm.ui.dialog_state import get_start_dir, remember_path
 from sgm.version import main_window_title
@@ -610,9 +611,10 @@ class MetadataEditor(QWidget):
     def _desc_for_json(value: str) -> str:
         return " " if value.strip() == "" else value
 
-    def __init__(self, *, on_saved, metadata_editors: list[str] | None = None):
+    def __init__(self, *, on_saved, on_advanced=None, metadata_editors: list[str] | None = None):
         super().__init__()
         self._on_saved = on_saved
+        self._on_advanced = on_advanced
         self._metadata_editors = list(metadata_editors or [])
 
         self._folder: Path | None = None
@@ -689,6 +691,15 @@ class MetadataEditor(QWidget):
             self._desc_tabs.addTab(edit, lang)
         fields_l.addWidget(self._desc_tabs, 1)
 
+        adv_row = QHBoxLayout()
+        adv_row.setContentsMargins(0, 0, 0, 0)
+        self._btn_advanced = QPushButton("Advanced")
+        self._btn_advanced.setToolTip("Open Advanced Settings (JSON) for save_highscores and jzintv_extra")
+        self._btn_advanced.clicked.connect(self._advanced_clicked)
+        adv_row.addWidget(self._btn_advanced)
+        adv_row.addStretch(1)
+        fields_l.addLayout(adv_row)
+
         self._others_group = QGroupBox("Others")
         self._others_group.setVisible(False)
         self._others_form = QFormLayout(self._others_group)
@@ -710,7 +721,14 @@ class MetadataEditor(QWidget):
         for edit in self._desc_edits.values():
             edit.textChanged.connect(self._mark_dirty)
 
-    def set_context(self, *, folder: Path | None, basename: str | None, path: Path | None) -> None:
+    def set_context(
+        self,
+        *,
+        folder: Path | None,
+        basename: str | None,
+        path: Path | None,
+        allow_advanced: bool = True,
+    ) -> None:
         self._folder = folder
         self._basename = basename
         self._path = path
@@ -718,6 +736,8 @@ class MetadataEditor(QWidget):
         self._raw_json = {}
         self._clear_others()
         self._btn_action.setEnabled(False)
+        self._btn_advanced.setEnabled(False)
+        self._btn_advanced.setVisible(bool(allow_advanced))
 
         if not folder or not basename:
             self._warning.setText("")
@@ -745,7 +765,46 @@ class MetadataEditor(QWidget):
         self._set_fields_enabled(True)
         self._fields.setVisible(True)
         self._bottom_spacer.setVisible(False)
+        if allow_advanced:
+            self._btn_advanced.setEnabled(True)
         self._load(path)
+
+    def reload_from_disk(self) -> None:
+        if self._path is None or not self._path.exists():
+            return
+        self._load(self._path)
+
+    def _advanced_clicked(self) -> None:
+        if self._path is None or not self._path.exists():
+            return
+        if self._on_advanced is None:
+            return
+
+        if self.has_unsaved_changes():
+            dlg = QMessageBox(self)
+            dlg.setIcon(QMessageBox.Icon.Warning)
+            dlg.setWindowTitle("Unsaved changes")
+            dlg.setText("You have unsaved metadata changes.")
+            dlg.setInformativeText("Save or discard changes before opening Advanced Settings?")
+            btn_save = dlg.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+            btn_discard = dlg.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancel = dlg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            dlg.setDefaultButton(btn_save)
+            dlg.exec()
+            clicked = dlg.clickedButton()
+            if clicked == btn_cancel:
+                return
+            if clicked == btn_save:
+                if not self.save_changes():
+                    return
+            elif clicked == btn_discard:
+                self.discard_changes()
+
+        try:
+            self._on_advanced(folder=self._folder, basename=self._basename, path=self._path)
+        except Exception:
+            # Avoid crashing the editor if the advanced handler fails.
+            pass
 
     def _set_fields_enabled(self, enabled: bool) -> None:
         for w in [self._name, self._nb_players, self._editor, self._year, self._desc_tabs, self._others_group]:
@@ -1513,6 +1572,8 @@ class MainWindow(QMainWindow):
         self._folder: Path | None = None
         self._games: dict[str, GameAssets] = {}
         self._folder_assets: dict[str, GameAssets] = {}
+        self._palette_files: list[Path] = []
+        self._keyboard_files: list[Path] = []
         self._current: str | None = None
 
         self._analysis_enabled: bool = False
@@ -1789,12 +1850,29 @@ class MainWindow(QMainWindow):
         scan = scan_folder(self._folder)
         self._games = scan.games
         self._folder_assets = scan.folders
+        self._palette_files = list(scan.palette_files)
+        self._keyboard_files = list(scan.keyboard_files)
 
         if self._analysis_enabled:
             self._analysis_by_game = {b: self._compute_warning_codes(g) for b, g in self._games.items()}
             self._update_filter_visibility()
 
         self._rebuild_game_list(preserve=self._current)
+
+    def _open_advanced_json(self, *, folder: Path | None, basename: str | None, path: Path | None) -> None:
+        if not self._folder or path is None or not path.exists():
+            return
+
+        dlg = AdvancedJsonDialog(
+            parent=self,
+            json_path=path,
+            root_folder=self._folder,
+            palette_files=self._palette_files,
+            keyboard_files=self._keyboard_files,
+            media_prefix=getattr(self._config, "jzintv_media_prefix", "/media/usb0"),
+            on_written=self._meta_editor.reload_from_disk,
+        )
+        dlg.exec()
 
     def _iter_tree_items(self):
         def walk(item: QTreeWidgetItem):
@@ -2710,7 +2788,11 @@ class MainWindow(QMainWindow):
         right_l = QVBoxLayout(right)
         right_l.setContentsMargins(0, 0, 0, 0)
         right_l.addWidget(QLabel("Metadata"))
-        self._meta_editor = MetadataEditor(on_saved=self.refresh, metadata_editors=self._config.metadata_editors)
+        self._meta_editor = MetadataEditor(
+            on_saved=self.refresh,
+            on_advanced=self._open_advanced_json,
+            metadata_editors=self._config.metadata_editors,
+        )
         right_l.addWidget(framed(self._meta_editor), 1)
 
         details_split = QSplitter(Qt.Orientation.Horizontal)
@@ -2829,7 +2911,7 @@ class MainWindow(QMainWindow):
                 self._btn_move.setVisible(False)
                 self._btn_move.setEnabled(False)
             self._btn_rename.setEnabled(False)
-            self._meta_editor.set_context(folder=None, basename=None, path=None)
+            self._meta_editor.set_context(folder=None, basename=None, path=None, allow_advanced=False)
             self._set_images_context(None)
             self._lbl_warnings.setText("Warnings: 0")
             return
@@ -2861,7 +2943,7 @@ class MainWindow(QMainWindow):
 
         self._btn_rename.setEnabled(True)
 
-        self._meta_editor.set_context(folder=game.folder, basename=game.basename, path=game.metadata)
+        self._meta_editor.set_context(folder=game.folder, basename=game.basename, path=game.metadata, allow_advanced=True)
 
         self._set_images_context(game)
         self._lbl_warnings.setText(f"Warnings: {self._count_selected_warnings(game)}")
@@ -2931,7 +3013,7 @@ class MainWindow(QMainWindow):
         self._cfg_row.setEnabled(False)
         self._btn_rename.setEnabled(True)
 
-        self._meta_editor.set_context(folder=assets.folder, basename=assets.basename, path=assets.metadata)
+        self._meta_editor.set_context(folder=assets.folder, basename=assets.basename, path=assets.metadata, allow_advanced=False)
         self._set_images_context(assets)
         self._lbl_warnings.setText(f"Warnings: {len(self._compute_warning_codes(assets, include_rom_cfg=False))}")
 
@@ -2972,7 +3054,7 @@ class MainWindow(QMainWindow):
         self._rom_row.setEnabled(False)
         self._cfg_row.setEnabled(False)
         self._btn_rename.setEnabled(False)
-        self._meta_editor.set_context(folder=None, basename=None, path=None)
+        self._meta_editor.set_context(folder=None, basename=None, path=None, allow_advanced=False)
         self._set_images_context(None)
         self._lbl_warnings.setText("Warnings: 0")
 
@@ -2994,7 +3076,7 @@ class MainWindow(QMainWindow):
         self._rom_row.setEnabled(False)
         self._cfg_row.setEnabled(False)
         self._btn_rename.setEnabled(False)
-        self._meta_editor.set_context(folder=None, basename=None, path=None)
+        self._meta_editor.set_context(folder=None, basename=None, path=None, allow_advanced=False)
         self._set_images_context(None)
         self._lbl_warnings.setText("Warnings: 0")
 

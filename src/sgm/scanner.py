@@ -18,14 +18,18 @@ class ScanResult:
     folder: Path
     games: dict[str, GameAssets]
     folders: dict[str, GameAssets]
+    palette_files: list[Path]
+    keyboard_files: list[Path]
 
 
 def scan_folder(folder: Path) -> ScanResult:
     games: dict[str, GameAssets] = {}
     folders: dict[str, GameAssets] = {}
+    palette_files: list[Path] = []
+    keyboard_files: list[Path] = []
 
     if not folder.exists() or not folder.is_dir():
-        return ScanResult(folder=folder, games={}, folders={})
+        return ScanResult(folder=folder, games={}, folders={}, palette_files=[], keyboard_files=[])
 
     def is_hidden_dir(p: Path) -> bool:
         name = p.name
@@ -80,6 +84,15 @@ def scan_folder(folder: Path) -> ScanResult:
                 continue
 
             suffix = entry.suffix.lower()
+
+            # Track helper files used by Advanced JSON settings.
+            # Palette files: .cfg or .txt containing "palette" anywhere in the filename.
+            if suffix in {".cfg", ".txt"} and "palette" in entry.name.casefold():
+                palette_files.append(entry)
+
+            # Keyboard hack files.
+            if suffix == ".kbd":
+                keyboard_files.append(entry)
             if suffix not in SUPPORTED_EXTS:
                 continue
 
@@ -177,7 +190,9 @@ def scan_folder(folder: Path) -> ScanResult:
     # Stable ordering for UI
     games = dict(sorted(games.items(), key=lambda kv: kv[0].lower()))
     folders = dict(sorted(folders.items(), key=lambda kv: kv[0].lower()))
-    return ScanResult(folder=folder, games=games, folders=folders)
+    palette_files = sorted(palette_files, key=lambda p: str(p).casefold())
+    keyboard_files = sorted(keyboard_files, key=lambda p: str(p).casefold())
+    return ScanResult(folder=folder, games=games, folders=folders, palette_files=palette_files, keyboard_files=keyboard_files)
 
 
 def _classify(path: Path) -> tuple[str | None, str | None]:
