@@ -52,6 +52,10 @@ class AppConfig:
 
     metadata_editors: list[str] = None  # populated in defaults()
 
+    # Used by Bulk JSON Update dialog to offer common JSON keys.
+    # Supports nested paths like description/en.
+    json_keys: list[str] = None  # populated in defaults()
+
     @staticmethod
     def defaults() -> "AppConfig":
         cfg = AppConfig()
@@ -65,6 +69,16 @@ class AppConfig:
             "Activision",
             "Atarisoft",
         ]
+
+        cfg.json_keys = [
+            "name",
+            "nb_players",
+            "editor",
+            "year",
+            "description/en",
+            "jzintv_extra",
+            "save_highscores",
+        ]
         return cfg
 
     @staticmethod
@@ -72,6 +86,15 @@ class AppConfig:
         editors = cfg.metadata_editors or []
         editors_clean = [str(e).strip() for e in editors if str(e).strip()]
         editors_clean_sorted = sorted(editors_clean, key=lambda s: s.casefold())
+
+        json_keys = cfg.json_keys or []
+        json_keys_clean: list[str] = []
+        for k in json_keys:
+            s = str(k).strip()
+            if not s:
+                continue
+            if s not in json_keys_clean:
+                json_keys_clean.append(s)
         return {
             "LastGameFolder": (cfg.last_game_folder or "none"),
             "Language": (cfg.language or "en").strip().lower() or "en",
@@ -89,6 +112,7 @@ class AppConfig:
             "UseBoxImageForBoxSmall": "True" if cfg.use_box_image_for_box_small else "False",
             "JzIntvMediaPrefix": (cfg.jzintv_media_prefix or "/media/usb0").strip() or "/media/usb0",
             "MetadataEditors": "|".join(editors_clean_sorted),
+            "JsonKeys": "|".join(json_keys_clean),
         }
 
     @staticmethod
@@ -223,6 +247,11 @@ class AppConfig:
         cfg.metadata_editors = _parse_string_list(
             data.get("MetadataEditors"),
             default=cfg.metadata_editors,
+        )
+
+        cfg.json_keys = _parse_string_list(
+            data.get("JsonKeys"),
+            default=cfg.json_keys,
         )
         return cfg
 

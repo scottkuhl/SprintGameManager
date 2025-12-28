@@ -70,6 +70,7 @@ from sgm.io_utils import (
 )
 from sgm.scanner import _classify, scan_folder
 from sgm.ui.advanced_json_dialog import AdvancedJsonDialog
+from sgm.ui.bulk_json_update_dialog import BulkJsonUpdateDialog
 from sgm.ui.widgets import ImageCard, ImageSpec, OverlayCard, OverlayPrimaryCard, SnapshotCard
 from sgm.ui.dialog_state import get_start_dir, remember_path
 from sgm.version import main_window_title
@@ -619,12 +620,14 @@ class MetadataEditor(QWidget):
         *,
         on_saved,
         on_advanced=None,
+        on_bulk_update=None,
         metadata_editors: list[str] | None = None,
         preferred_language: str = "en",
     ):
         super().__init__()
         self._on_saved = on_saved
         self._on_advanced = on_advanced
+        self._on_bulk_update = on_bulk_update
         self._metadata_editors = list(metadata_editors or [])
         self._preferred_language = (preferred_language or "en").strip().lower() or "en"
         if self._preferred_language not in self.LANGS:
@@ -633,6 +636,7 @@ class MetadataEditor(QWidget):
         self._folder: Path | None = None
         self._basename: str | None = None
         self._path: Path | None = None
+        self._bulk_game_ids: list[str] = []
         self._dirty = False
         self._raw_json: dict = {}
         self._others_simple_widgets: dict[str, QWidget] = {}
@@ -656,6 +660,13 @@ class MetadataEditor(QWidget):
         self._btn_action = QPushButton("")
         self._btn_action.clicked.connect(self._action_clicked)
         btn_row.addWidget(self._btn_action)
+
+        self._btn_bulk = QPushButton("Bulk JSON Update")
+        self._btn_bulk.setToolTip("Bulk update a JSON field for all selected games")
+        self._btn_bulk.clicked.connect(self._bulk_clicked)
+        self._btn_bulk.setVisible(False)
+        btn_row.addWidget(self._btn_bulk)
+
         btn_row.addStretch(1)
         top_l.addLayout(btn_row)
 
@@ -760,6 +771,10 @@ class MetadataEditor(QWidget):
         self._btn_advanced.setEnabled(False)
         self._btn_advanced.setVisible(bool(allow_advanced))
 
+        # Default: not in bulk mode.
+        self._bulk_game_ids = []
+        self._btn_bulk.setVisible(False)
+        self._btn_bulk.setEnabled(False)
 
         if not folder or not basename:
             self._warning.setText("")
@@ -790,6 +805,37 @@ class MetadataEditor(QWidget):
         if allow_advanced:
             self._btn_advanced.setEnabled(True)
         self._load(path)
+
+    def set_bulk_context(self, game_ids: list[str]) -> None:
+        ids = [str(g or "").strip() for g in (game_ids or []) if str(g or "").strip()]
+        self._bulk_game_ids = ids
+
+        # Hide per-game controls.
+        self._btn_action.setVisible(False)
+        self._btn_advanced.setVisible(False)
+        self._set_fields_enabled(False)
+        self._fields.setVisible(False)
+        self._bottom_spacer.setVisible(True)
+
+        if len(ids) >= 2 and self._on_bulk_update is not None:
+            self._warning.setText(f"Bulk update: {len(ids)} games selected")
+            self._btn_bulk.setVisible(True)
+            self._btn_bulk.setEnabled(True)
+        else:
+            self._warning.setText("")
+            self._btn_bulk.setVisible(False)
+            self._btn_bulk.setEnabled(False)
+
+    def _bulk_clicked(self) -> None:
+        if self._on_bulk_update is None:
+            return
+        ids = list(self._bulk_game_ids or [])
+        if len(ids) < 2:
+            return
+        try:
+            self._on_bulk_update(ids)
+        except Exception:
+            pass
 
     def reload_from_disk(self) -> None:
         if self._path is None or not self._path.exists():
@@ -1933,6 +1979,45 @@ class MainWindow(QMainWindow):
             on_written=self._meta_editor.reload_from_disk,
         )
         dlg.exec()
+
+    def _open_bulk_json_update(self, game_ids: list[str]) -> None:
+        if not self._folder:
+            return
+
+        ids = [str(g or "").strip() for g in (game_ids or []) if str(g or "").strip()]
+        if len(ids) < 2:
+            return
+
+        games: list[tuple[str, Path, str]] = []
+        for gid in ids:
+            game = self._games.get(gid)
+            if not game:
+                continue
+            games.append((gid, game.folder, game.basename))
+
+        if len(games) < 2:
+            return
+
+        all_games: list[tuple[str, Path, str]] = []
+        try:
+            for gid, game in self._games.items():
+                if not game:
+                    continue
+                all_games.append((str(gid), game.folder, game.basename))
+        except Exception:
+            all_games = list(games)
+
+        # Stable ordering for the preview list.
+        all_games = sorted(all_games, key=lambda t: (str(t[1]).casefold(), str(t[2]).casefold(), str(t[0]).casefold()))
+
+        dlg = BulkJsonUpdateDialog(
+            parent=self,
+            games=games,
+            all_games=all_games,
+            json_keys=getattr(self._config, "json_keys", None),
+        )
+        dlg.exec()
+        self.refresh()
 
     def _iter_tree_items(self):
         def walk(item: QTreeWidgetItem):
@@ -3100,6 +3185,7 @@ class MainWindow(QMainWindow):
         self._meta_editor = MetadataEditor(
             on_saved=self.refresh,
             on_advanced=self._open_advanced_json,
+            on_bulk_update=self._open_bulk_json_update,
             metadata_editors=self._config.metadata_editors,
             preferred_language=getattr(self._config, "language", "en"),
         )
@@ -3377,7 +3463,10 @@ class MainWindow(QMainWindow):
         self._rom_row.setEnabled(False)
         self._cfg_row.setEnabled(False)
         self._btn_rename.setEnabled(False)
-        self._meta_editor.set_context(folder=None, basename=None, path=None, allow_advanced=False)
+        if len(self._multi_selected_game_ids) >= 2:
+            self._meta_editor.set_bulk_context(self._multi_selected_game_ids)
+        else:
+            self._meta_editor.set_context(folder=None, basename=None, path=None, allow_advanced=False)
         self._set_images_context(None)
         self._lbl_warnings.setText("Warnings: 0")
 
