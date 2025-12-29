@@ -122,7 +122,7 @@ class ImageCard(QFrame):
             self._chk_keep_ratio.setChecked(False)
             self._chk_keep_ratio.setToolTip(
                 keep_ratio_tooltip
-                or "When adding an overlay image via Browse/Paste, keep its aspect ratio by fitting it inside the target resolution and centering it on a transparent canvas."
+                or "When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas."
             )
             title_row.addSpacing(8)
             title_row.addWidget(self._chk_keep_ratio)
@@ -402,7 +402,6 @@ class ImageCard(QFrame):
                     pil,
                     dest,
                     expected=self._spec.expected,
-                    canvas_png=self._overlay_empty_canvas_path(),
                 )
             else:
                 save_png_resized_from_clipboard_qimage(qimg, dest, expected=self._spec.expected)
@@ -427,7 +426,6 @@ class ImageCard(QFrame):
                     src,
                     dest,
                     expected=self._spec.expected,
-                    canvas_png=self._overlay_empty_canvas_path(),
                 )
             else:
                 save_png_resized_from_file(src, dest, expected=self._spec.expected)

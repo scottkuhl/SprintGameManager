@@ -490,6 +490,8 @@ class ThinFileRow(QWidget):
         self._folder: Path | None = None
         self._basename: str | None = None
         self._extra_handler = None
+        self._open_handler = None
+        self._open_tooltip_base = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
@@ -522,6 +524,16 @@ class ThinFileRow(QWidget):
         self._btn.setToolTip(f"Browse to add a {self._title} file ({exts})")
         top.addWidget(self._btn)
 
+        self._btn_open = QToolButton()
+        self._btn_open.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._btn_open.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        self._btn_open.setFixedSize(QSize(24, 24))
+        self._btn_open.setIconSize(QSize(16, 16))
+        self._btn_open.setStyleSheet("QToolButton { padding: 0px; }")
+        self._btn_open.setVisible(False)
+        self._btn_open.setToolTip("")
+        top.addWidget(self._btn_open)
+
         layout.addLayout(top)
 
         self.setAcceptDrops(True)
@@ -553,6 +565,21 @@ class ThinFileRow(QWidget):
         if self._btn_extra.isVisible():
             self._btn_extra.setEnabled(bool(self._folder and self._basename))
 
+        if self._open_handler is not None:
+            exists = bool(existing and existing.exists() and existing.is_file())
+            self._btn_open.setVisible(exists)
+            self._btn_open.setEnabled(exists)
+            if exists and existing is not None:
+                base = (self._open_tooltip_base or "").strip()
+                if base:
+                    self._btn_open.setToolTip(f"{base}\n{existing}")
+                else:
+                    self._btn_open.setToolTip(str(existing))
+            else:
+                self._btn_open.setToolTip("")
+        else:
+            self._btn_open.setVisible(False)
+
     def set_extra_action(self, label: str, handler, tooltip: str | None = None) -> None:
         self._btn_extra.setText(label)
         self._btn_extra.setToolTip((tooltip or "").strip())
@@ -565,6 +592,20 @@ class ThinFileRow(QWidget):
         self._btn_extra.clicked.connect(handler)
         self._btn_extra.setVisible(True)
         self._btn_extra.setEnabled(bool(self._folder and self._basename))
+
+    def set_open_action(self, handler, tooltip: str | None = None, *, icon: QIcon | None = None) -> None:
+        if self._open_handler is not None and self._open_handler is not handler:
+            try:
+                self._btn_open.clicked.disconnect(self._open_handler)
+            except Exception:
+                pass
+        self._open_handler = handler
+        self._open_tooltip_base = (tooltip or "").strip()
+        if icon is not None:
+            self._btn_open.setIcon(icon)
+        self._btn_open.clicked.connect(handler)
+        # Visibility is controlled by set_context() based on whether the file exists.
+        self._btn_open.setVisible(False)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -636,7 +677,6 @@ class MetadataEditor(QWidget):
         self._folder: Path | None = None
         self._basename: str | None = None
         self._path: Path | None = None
-        self._bulk_game_ids: list[str] = []
         self._dirty = False
         self._raw_json: dict = {}
         self._others_simple_widgets: dict[str, QWidget] = {}
@@ -660,12 +700,6 @@ class MetadataEditor(QWidget):
         self._btn_action = QPushButton("")
         self._btn_action.clicked.connect(self._action_clicked)
         btn_row.addWidget(self._btn_action)
-
-        self._btn_bulk = QPushButton("Bulk JSON Update")
-        self._btn_bulk.setToolTip("Bulk update a JSON field for all selected games")
-        self._btn_bulk.clicked.connect(self._bulk_clicked)
-        self._btn_bulk.setVisible(False)
-        btn_row.addWidget(self._btn_bulk)
 
         btn_row.addStretch(1)
         top_l.addLayout(btn_row)
@@ -771,11 +805,6 @@ class MetadataEditor(QWidget):
         self._btn_advanced.setEnabled(False)
         self._btn_advanced.setVisible(bool(allow_advanced))
 
-        # Default: not in bulk mode.
-        self._bulk_game_ids = []
-        self._btn_bulk.setVisible(False)
-        self._btn_bulk.setEnabled(False)
-
         if not folder or not basename:
             self._warning.setText("")
             self._btn_action.setVisible(False)
@@ -807,35 +836,13 @@ class MetadataEditor(QWidget):
         self._load(path)
 
     def set_bulk_context(self, game_ids: list[str]) -> None:
-        ids = [str(g or "").strip() for g in (game_ids or []) if str(g or "").strip()]
-        self._bulk_game_ids = ids
-
-        # Hide per-game controls.
+        # Multi-select: hide per-game controls; bulk updater is launched from the main window.
         self._btn_action.setVisible(False)
         self._btn_advanced.setVisible(False)
         self._set_fields_enabled(False)
         self._fields.setVisible(False)
         self._bottom_spacer.setVisible(True)
-
-        if len(ids) >= 2 and self._on_bulk_update is not None:
-            self._warning.setText(f"Bulk update: {len(ids)} games selected")
-            self._btn_bulk.setVisible(True)
-            self._btn_bulk.setEnabled(True)
-        else:
-            self._warning.setText("")
-            self._btn_bulk.setVisible(False)
-            self._btn_bulk.setEnabled(False)
-
-    def _bulk_clicked(self) -> None:
-        if self._on_bulk_update is None:
-            return
-        ids = list(self._bulk_game_ids or [])
-        if len(ids) < 2:
-            return
-        try:
-            self._on_bulk_update(ids)
-        except Exception:
-            pass
+        self._warning.setText("")
 
     def reload_from_disk(self) -> None:
         if self._path is None or not self._path.exists():
@@ -1822,6 +1829,12 @@ class MainWindow(QMainWindow):
 
         list_l.addWidget(analyze)
 
+        self._btn_json_bulk_update = QPushButton("JSON Bulk Update")
+        self._btn_json_bulk_update.setToolTip("Visualize and update a JSON field across all games")
+        self._btn_json_bulk_update.clicked.connect(self._open_json_bulk_update_all)
+        self._btn_json_bulk_update.setEnabled(False)
+        list_l.addWidget(self._btn_json_bulk_update)
+
         split.addWidget(self._list_panel)
 
         self._detail_root = QWidget()
@@ -1927,6 +1940,17 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Open sgm.ini", str(e))
 
+    def _open_cfg_clicked(self) -> None:
+        try:
+            game = self._current_game()
+            cfg_path = game.config if game is not None else None
+            if not cfg_path or not cfg_path.exists():
+                QMessageBox.warning(self, "Open Config", f"Config file not found:\n{cfg_path}")
+                return
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(cfg_path)))
+        except Exception as e:
+            QMessageBox.warning(self, "Open Config", str(e))
+
     def _reset_analysis_state(self) -> None:
         self._analysis_enabled = False
         self._analysis_by_game = {}
@@ -1964,6 +1988,37 @@ class MainWindow(QMainWindow):
             self._update_filter_visibility()
 
         self._rebuild_game_list(preserve=self._current)
+
+        if hasattr(self, "_btn_json_bulk_update"):
+            self._btn_json_bulk_update.setEnabled(bool(self._games))
+
+    def _open_json_bulk_update_all(self) -> None:
+        if not self._folder:
+            return
+
+        all_games: list[tuple[str, Path, str]] = []
+        try:
+            for gid, game in self._games.items():
+                if not game:
+                    continue
+                all_games.append((str(gid), game.folder, game.basename))
+        except Exception:
+            all_games = []
+
+        if not all_games:
+            return
+
+        # Stable ordering for the preview list.
+        all_games = sorted(all_games, key=lambda t: (str(t[1]).casefold(), str(t[2]).casefold(), str(t[0]).casefold()))
+
+        dlg = BulkJsonUpdateDialog(
+            parent=self,
+            games=all_games,
+            all_games=all_games,
+            json_keys=getattr(self._config, "json_keys", None),
+        )
+        dlg.exec()
+        self.refresh()
 
     def _open_advanced_json(self, *, folder: Path | None, basename: str | None, path: Path | None) -> None:
         if not self._folder or path is None or not path.exists():
@@ -3040,6 +3095,11 @@ class MainWindow(QMainWindow):
             self._lookup_cfg,
             "Find and copy a bundled .cfg by selecting a game from the lookup list",
         )
+        self._cfg_row.set_open_action(
+            self._open_cfg_clicked,
+            "Open this game's .cfg in your default editor",
+            icon=self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
+        )
         left_l.addWidget(framed(self._cfg_row))
 
         # Images area
@@ -3057,6 +3117,8 @@ class MainWindow(QMainWindow):
             config=self._config,
             spec=ImageSpec(title="Box", expected=self._config.box_resolution, filename="{basename}.png"),
             on_changed=self._images_changed,
+            keep_ratio_enabled=True,
+            keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
         images_grid.addWidget(self._img_box, 0, 0)
 
@@ -3064,6 +3126,8 @@ class MainWindow(QMainWindow):
             config=self._config,
             spec=ImageSpec(title="Box Small", expected=self._config.box_small_resolution, filename="{basename}_small.png"),
             on_changed=self._images_changed,
+            keep_ratio_enabled=True,
+            keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
         images_grid.addWidget(self._img_box_small, 0, 1)
 
@@ -3071,6 +3135,8 @@ class MainWindow(QMainWindow):
             config=self._config,
             spec=ImageSpec(title="Overlay Big", expected=self._config.overlay_big_resolution, filename="{basename}_big_overlay.png"),
             on_changed=self._images_changed,
+            keep_ratio_enabled=True,
+            keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
         images_grid.addWidget(self._img_overlay_big, 1, 0)
 
@@ -3081,7 +3147,7 @@ class MainWindow(QMainWindow):
             spec=ImageSpec(title="Overlay 1", expected=self._config.overlay_resolution, filename="{basename}_overlay.png"),
             on_changed=self._images_changed,
             keep_ratio_enabled=True,
-            keep_ratio_tooltip="When checked, added overlay images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
+            keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
         self._img_overlay1.set_extra_action(
             "Build",
@@ -3101,7 +3167,7 @@ class MainWindow(QMainWindow):
             spec=ImageSpec(title="Overlay 2", expected=self._config.overlay_resolution, filename="{basename}_overlay2.png"),
             on_changed=self._images_changed,
             keep_ratio_enabled=True,
-            keep_ratio_tooltip="When checked, added overlay images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
+            keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
         self._img_overlay2.set_extra_action(
             "Build",
@@ -3121,7 +3187,7 @@ class MainWindow(QMainWindow):
             spec=ImageSpec(title="Overlay 3", expected=self._config.overlay_resolution, filename="{basename}_overlay3.png"),
             on_changed=self._images_changed,
             keep_ratio_enabled=True,
-            keep_ratio_tooltip="When checked, added overlay images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
+            keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
         self._img_overlay3.set_extra_action(
             "Build",
@@ -3138,6 +3204,8 @@ class MainWindow(QMainWindow):
             config=self._config,
             spec=ImageSpec(title="QR Code", expected=self._config.qrcode_resolution, filename="{basename}_qrcode.png"),
             on_changed=self._images_changed,
+            keep_ratio_enabled=True,
+            keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
         self._img_qr.set_extra_action(
             "URL",
@@ -3151,18 +3219,24 @@ class MainWindow(QMainWindow):
             config=self._config,
             spec=ImageSpec(title="Snap 1", expected=self._config.snap_resolution, filename="{basename}_snap1.png"),
             on_changed=self._images_changed,
+            keep_ratio_enabled=True,
+            keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
         self._snap2 = SnapshotCard(
             index=2,
             config=self._config,
             spec=ImageSpec(title="Snap 2", expected=self._config.snap_resolution, filename="{basename}_snap2.png"),
             on_changed=self._images_changed,
+            keep_ratio_enabled=True,
+            keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
         self._snap3 = SnapshotCard(
             index=3,
             config=self._config,
             spec=ImageSpec(title="Snap 3", expected=self._config.snap_resolution, filename="{basename}_snap3.png"),
             on_changed=self._images_changed,
+            keep_ratio_enabled=True,
+            keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
         self._snaps = SnapshotsRow(cards=[self._snap1, self._snap2, self._snap3], on_reorder=self._reorder_snaps)
         images_grid.addWidget(self._snaps, 2, 0, 1, 4)

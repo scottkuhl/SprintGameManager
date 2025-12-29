@@ -45,6 +45,32 @@ Each image card supports:
 ### 8) QR code
 - Use the QR tools to generate/update the game QR image (including URL-based creation).
 
+### Folder support
+- The app supports a folder-per-game layout. Each game's files (ROM, .cfg, .json metadata, PNGs) live alongside a common basename.
+- You can add or move games between folders; the UI preserves metadata and assets when renaming or moving files.
+- Hidden folders (starting with `.`) are ignored. On Windows, filesystem-hidden folders are also respected.
+
+### Advanced JSON settings
+- Use the **Advanced** button in the metadata editor to open the Advanced JSON dialog for more specialized fields such as `save_highscores` and `jzintv_extra` file references.
+- Advanced mode shows raw JSON editing of the metadata while preserving other keys when saving. Use it when you need to add custom keys or tweak nested structures.
+- When editing JSON directly, the app validates basic structure but does not run schema-level validation — double-check any complex edits.
+
+### JSON Bulk Updater
+- Launch the JSON Bulk Updater from the `JSON Bulk Update` button under the Games list (below the Analyze controls).
+- Purpose: visualize a selected JSON field across all games, preview proposed changes, and apply updates in bulk while preserving unrelated keys.
+- Steps:
+	1. Choose the **Field to Update** (standard fields like Players, Year, or `Other` for a custom key).
+	2. Select a **Bulk Update Option** (No Change, Set Value, Replace/Prefix/Append Text, Remove Entry, or Regular Expression).
+	3. If applicable, supply option inputs (Value, Find/Replace, Prefix, Append, or Regex pattern/replacement).
+	4. Use the **Preview Updates** button to build a table showing Current vs New values for all games. Filter by Name/Path or Current Value to narrow the preview.
+	5. Toggle the **Include** checkbox per-row to control which rows will be written. The label next to Perform Updates shows how many visible rows will be applied.
+	6. Click **Perform Updates** to write changes — only included and visible rows are processed. The dialog preserves other JSON keys and refreshes to show the post-update state.
+
+Tips:
+- Prefix/Append: when applying a Prefix or Append to an empty or `<Not Defined>` current value, the updater trims leading/trailing whitespace from your input so you don't end up with stray spaces.
+- Use the `...` buttons in table cells to view or edit full values in a popup when needed.
+- Filters default to "Contains" to make searching easier; use the Clear Filters button (✕) to reset filters quickly.
+
 ## Technical (developers)
 
 ### Setup

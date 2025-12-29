@@ -51,29 +51,43 @@ def scan_folder(folder: Path) -> ScanResult:
         return False
 
     def is_hidden_file(p: Path) -> bool:
-        # Keep this simple: dot-files are hidden; Windows hidden attribute is handled
-        # via the directory pruning above.
+        # Keep this simple: dot-files are hidden.
+        # Note: we still traverse hidden directories for helper file discovery
+        # (palette/.kbd), so we do not rely on Windows hidden attributes here.
         return p.name.startswith(".")
 
-    # Custom walk so we can prune hidden dirs.
-    stack = [folder]
+    # Custom walk so we can prune hidden dirs for game discovery,
+    # but still traverse them to find helper files (palette/.kbd).
+    #
+    # allow_games=False means: do NOT discover games or folder-supporting assets
+    # from this subtree; only collect helper files.
+    stack: list[tuple[Path, bool]] = [(folder, True)]
     while stack:
-        cur = stack.pop()
+        cur, allow_games = stack.pop()
         try:
             entries = list(cur.iterdir())
         except Exception:
             continue
 
-        # Pre-scan child directories so we can treat sibling files with the same
-        # basename as folder-supporting assets (not games).
         dir_names: set[str] = set()
-        for entry in entries:
-            if not entry.is_dir():
-                continue
-            if is_hidden_dir(entry):
-                continue
-            dir_names.add(entry.name)
-            stack.append(entry)
+        if allow_games:
+            # Pre-scan child directories so we can treat sibling files with the same
+            # basename as folder-supporting assets (not games).
+            for entry in entries:
+                if not entry.is_dir():
+                    continue
+                if is_hidden_dir(entry):
+                    # Hidden directories should not contribute to game discovery,
+                    # but we still walk them for helper files.
+                    stack.append((entry, False))
+                    continue
+                dir_names.add(entry.name)
+                stack.append((entry, True))
+        else:
+            # Helper-only mode: traverse the subtree, but never discover games/assets.
+            for entry in entries:
+                if entry.is_dir():
+                    stack.append((entry, False))
 
         for entry in entries:
             if entry.is_dir():
@@ -93,6 +107,9 @@ def scan_folder(folder: Path) -> ScanResult:
             # Keyboard hack files.
             if suffix == ".kbd":
                 keyboard_files.append(entry)
+
+            if not allow_games:
+                continue
             if suffix not in SUPPORTED_EXTS:
                 continue
 

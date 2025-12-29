@@ -142,18 +142,20 @@ def save_png_preserve_ratio_centered_on_canvas_from_pil(
     dest: Path,
     *,
     expected: Resolution,
-    canvas_png: Path,
+    canvas_png: Path | None = None,
 ) -> None:
     try:
         ow, oh = expected.width, expected.height
 
-        if not canvas_png.exists():
-            raise ImageProcessError(f"Missing canvas image: {canvas_png}")
-
-        with Image.open(canvas_png) as canvas:
-            canvas = canvas.convert("RGBA")
-            if canvas.size != (ow, oh):
-                canvas = canvas.resize((ow, oh), resample=Image.LANCZOS)
+        canvas: Image.Image
+        if canvas_png is not None and canvas_png.exists():
+            with Image.open(canvas_png) as opened:
+                canvas = opened.convert("RGBA")
+                if canvas.size != (ow, oh):
+                    canvas = canvas.resize((ow, oh), resample=Image.LANCZOS)
+        else:
+            # Generate a transparent RGBA canvas in code (more robust than depending on an on-disk blank PNG).
+            canvas = Image.new("RGBA", (ow, oh), (0, 0, 0, 0))
 
         img = img.convert("RGBA")
         iw, ih = img.size
@@ -182,7 +184,7 @@ def save_png_preserve_ratio_centered_on_canvas_from_file(
     dest: Path,
     *,
     expected: Resolution,
-    canvas_png: Path,
+    canvas_png: Path | None = None,
 ) -> None:
     try:
         with Image.open(src) as img:
