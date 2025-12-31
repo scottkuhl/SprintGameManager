@@ -849,6 +849,43 @@ class MetadataEditor(QWidget):
             return
         self._load(self._path)
 
+    def retarget_context_preserve_edits(
+        self,
+        *,
+        folder: Path | None,
+        basename: str | None,
+        path: Path | None,
+        allow_advanced: bool = True,
+    ) -> None:
+        """Update the active game/folder context without reloading fields.
+
+        Used when external actions (like renames) change the metadata path while the
+        user has unsaved edits. This avoids wiping in-memory field edits.
+        """
+
+        self._folder = folder
+        self._basename = basename
+        self._path = path
+
+        self._btn_advanced.setVisible(bool(allow_advanced))
+        self._btn_advanced.setEnabled(bool(allow_advanced and path is not None and path.exists()))
+
+        if not folder or not basename:
+            return
+
+        if path is None or not path.exists():
+            # Keep current field values, but reflect that the backing JSON is missing.
+            self._warning.setText("Missing metadata: <basename>.json")
+            self._btn_action.setText("Create JSON")
+            self._btn_action.setVisible(True)
+            self._btn_action.setEnabled(True)
+            return
+
+        self._warning.setText("")
+        self._btn_action.setText("Save")
+        self._btn_action.setVisible(True)
+        self._btn_action.setEnabled(bool(self._dirty))
+
     def _advanced_clicked(self) -> None:
         if self._path is None or not self._path.exists():
             return
@@ -1971,7 +2008,7 @@ class MainWindow(QMainWindow):
 
         self._update_filter_visibility()
 
-    def refresh(self) -> None:
+    def refresh(self, *, preserve_metadata_edits: bool = False) -> None:
         if not self._folder:
             return
         scan = scan_folder(self._folder)
@@ -1987,10 +2024,96 @@ class MainWindow(QMainWindow):
             }
             self._update_filter_visibility()
 
-        self._rebuild_game_list(preserve=self._current)
+        silent_preserve = bool(preserve_metadata_edits and self._meta_editor.has_unsaved_changes())
+        self._rebuild_game_list(preserve=self._current, silent_preserve=silent_preserve)
+        if silent_preserve:
+            # We rebuilt the tree without emitting selection-changed signals.
+            # Refresh image thumbnails/warnings for the current selection without
+            # reloading metadata from disk (which would wipe unsaved edits).
+            self._refresh_current_details_without_metadata_reload()
 
         if hasattr(self, "_btn_json_bulk_update"):
             self._btn_json_bulk_update.setEnabled(bool(self._games))
+
+    def _refresh_current_details_without_metadata_reload(self) -> None:
+        sel = self._current_selection()
+        if sel is None:
+            return
+
+        kind, val = sel
+        if kind == "game":
+            game = self._games.get(val)
+            if not game:
+                return
+
+            # Keep the header/controls in sync (without reloading metadata fields).
+            self._rom_row.set_title("ROM")
+            self._cfg_row.set_title("Config")
+            self._btn_rename.setText("Change File Name")
+            self._btn_rename.setToolTip("Rename this game's files (basename)")
+            if hasattr(self, "_btn_move"):
+                self._btn_move.setVisible(bool(self._has_any_folders))
+                self._btn_move.setEnabled(bool(self._has_any_folders))
+                self._btn_move.setToolTip("Move this game to a different folder")
+
+            self._base_name.setText(f"Basename (game): {game.basename}")
+            if len(game.basename) > self._config.desired_max_base_file_length:
+                self._base_warn.setText(
+                    f"Warning: basename length {len(game.basename)} exceeds DesiredMaxBaseFileLength={self._config.desired_max_base_file_length}"
+                )
+                self._base_warn.setVisible(True)
+            else:
+                self._base_warn.setText("")
+                self._base_warn.setVisible(False)
+
+            rom_warn = "Missing ROM" if game.rom is None else None
+            self._rom_row.set_context(folder=game.folder, basename=game.basename, existing=game.rom, warning=rom_warn)
+            self._rom_row.setEnabled(True)
+
+            cfg_warn = None
+            if game.rom is not None:
+                if game.rom.suffix.lower() in {".int", ".bin"} and game.config is None:
+                    cfg_warn = "Missing config for .int/.bin ROM (.cfg missing)"
+            self._cfg_row.set_context(folder=game.folder, basename=game.basename, existing=game.config, warning=cfg_warn)
+            self._cfg_row.setEnabled(True)
+
+            self._set_images_context(game)
+            self._lbl_warnings.setText(f"Warnings: {self._count_selected_warnings(game)}")
+            return
+
+        if kind == "folder":
+            assets = self._current_assets()
+            if not assets:
+                return
+            # Keep header/controls in sync (without reloading metadata fields).
+            self._rom_row.set_title("ROM (Not Applicable)")
+            self._cfg_row.set_title("Config (Not Applicable)")
+            self._btn_rename.setText("Change Folder Name")
+            self._btn_rename.setToolTip("Rename this folder and its folder-support files")
+            if hasattr(self, "_btn_move"):
+                self._btn_move.setVisible(True)
+                self._btn_move.setEnabled(True)
+                self._btn_move.setToolTip("Move this folder and its folder-support files")
+
+            self._base_name.setText(f"Basename (folder): {assets.basename}")
+            if len(assets.basename) > self._config.desired_max_base_file_length:
+                self._base_warn.setText(
+                    f"Warning: basename length {len(assets.basename)} exceeds DesiredMaxBaseFileLength={self._config.desired_max_base_file_length}"
+                )
+                self._base_warn.setVisible(True)
+            else:
+                self._base_warn.setText("")
+                self._base_warn.setVisible(False)
+
+            self._rom_row.set_context(folder=assets.folder, basename=assets.basename, existing=None, warning=None, missing_text="")
+            self._cfg_row.set_context(folder=assets.folder, basename=assets.basename, existing=None, warning=None, missing_text="")
+            self._rom_row.setEnabled(False)
+            self._cfg_row.setEnabled(False)
+
+            # Folder selections do not allow metadata editing; safe to refresh images.
+            self._set_images_context(assets)
+            self._lbl_warnings.setText(f"Warnings: {len(self._compute_warning_codes(assets, include_rom_cfg=False))}")
+            return
 
     def _open_json_bulk_update_all(self) -> None:
         if not self._folder:
@@ -2733,7 +2856,7 @@ class MainWindow(QMainWindow):
         h = max(80, int(self._list_panel.height() / 3))
         self._filters_scroll.setMaximumHeight(h)
 
-    def _rebuild_game_list(self, preserve: str | None = None) -> None:
+    def _rebuild_game_list(self, preserve: str | None = None, *, silent_preserve: bool = False) -> None:
         prev = preserve
         expanded_before = self._expanded_folder_paths() | set(self._force_expand_folder_paths)
         self._tree.blockSignals(True)
@@ -2821,7 +2944,7 @@ class MainWindow(QMainWindow):
         self._restore_expanded_folder_paths(expanded_before)
 
         if prev:
-            self._set_current_in_tree(prev, silent=False)
+            self._set_current_in_tree(prev, silent=bool(silent_preserve))
             return
 
         # Default selection: first visible game in the tree.
@@ -3783,7 +3906,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Copy failed", str(e))
                 return
 
-        self.refresh()
+        self.refresh(preserve_metadata_edits=True)
 
     def _add_rom(self, src: Path) -> None:
         game = self._current_game()
@@ -3833,7 +3956,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Copy failed", str(e))
             return
-        self.refresh()
+        self.refresh(preserve_metadata_edits=True)
 
     # ---------- rename ----------
 
@@ -3909,9 +4032,17 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Rename failed", str(e))
                 return
 
-            self.refresh()
+            # Preserve pending metadata edits, but retarget the editor to the new basename/path.
+            if self._meta_editor.has_unsaved_changes():
+                self._meta_editor.retarget_context_preserve_edits(
+                    folder=parent,
+                    basename=new_name,
+                    path=(parent / f"{new_name}.json"),
+                    allow_advanced=False,
+                )
+
             self._current = f"f:{str(new_dir)}"
-            self._set_current_in_tree(self._current, silent=False)
+            self.refresh(preserve_metadata_edits=True)
             return
 
         game = self._current_game()
@@ -3940,16 +4071,22 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Rename failed", str(e))
             return
 
-        self.refresh()
-        # Select the renamed game
         try:
             rel = game.folder.relative_to(self._folder) if self._folder else Path(".")
         except Exception:
             rel = Path(".")
         new_id = new_base if str(rel) in {".", ""} else f"{rel.as_posix()}/{new_base}"
-        if new_id in self._games:
-            self._current = f"g:{new_id}"
-            self._set_current_in_tree(self._current, silent=False)
+        # Preserve pending metadata edits, but retarget the editor to the new basename/path.
+        if self._meta_editor.has_unsaved_changes():
+            self._meta_editor.retarget_context_preserve_edits(
+                folder=game.folder,
+                basename=new_base,
+                path=(game.folder / f"{new_base}.json"),
+                allow_advanced=True,
+            )
+
+        self._current = f"g:{new_id}"
+        self.refresh(preserve_metadata_edits=True)
 
     # ---------- images ----------
 
@@ -3965,7 +4102,8 @@ class MainWindow(QMainWindow):
                         save_png_resized_from_file(box_path, small_dest, expected=self._config.box_small_resolution)
                     except Exception as e:
                         QMessageBox.warning(self, "Box Small", str(e))
-        self.refresh()
+        # Preserve unsaved metadata edits when updating image thumbnails.
+        self.refresh(preserve_metadata_edits=True)
 
     def _regenerate_box_small(self) -> None:
         if not self._config.use_box_image_for_box_small:
@@ -3982,7 +4120,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Box Small", str(e))
             return
-        self.refresh()
+        self.refresh(preserve_metadata_edits=True)
 
     def _build_overlay(self, which: int = 1) -> None:
         game = self._current_assets()
@@ -4123,7 +4261,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "QR failed", str(e))
             return
-        self.refresh()
+        self.refresh(preserve_metadata_edits=True)
 
     def _reorder_snaps(self, src_index: int, dst_index: int) -> None:
         game = self._current_assets()
