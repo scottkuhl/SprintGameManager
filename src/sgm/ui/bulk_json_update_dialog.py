@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QRect, QEvent
-from PySide6.QtGui import QColor, QBrush, QFontMetrics
+from PySide6.QtGui import QColor, QBrush, QFontMetrics, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -94,18 +94,32 @@ class _ValueButtonDelegate(QStyledItemDelegate):
         text_r.adjust(4, 0, -(btn_r.width() + 8), 0)
 
         painter.save()
-        painter.setPen(QColor(0, 0, 0))
-        fm = painter.fontMetrics()
-        elided = fm.elidedText(full_text, Qt.TextElideMode.ElideRight, max(10, text_r.width()))
-        painter.drawText(text_r, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), elided)
-        painter.restore()
+        try:
+            # Respect palette (including dark mode and selection colors).
+            pal = opt.palette
+            role = QPalette.ColorRole.HighlightedText if (opt.state & QStyle.StateFlag.State_Selected) else QPalette.ColorRole.Text
+            painter.setPen(pal.color(role))
+            fm = painter.fontMetrics()
+            elided = fm.elidedText(full_text, Qt.TextElideMode.ElideRight, max(10, text_r.width()))
+            painter.drawText(text_r, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), elided)
+        finally:
+            painter.restore()
 
-        # Draw button.
+        # Draw a tiny button at the right side. On macOS, drawing CE_PushButton at
+        # very small sizes can become visually imperceptible; draw the button panel
+        # explicitly and then draw a centered ellipsis glyph.
         btn_opt = QStyleOptionButton()
         btn_opt.rect = btn_r
-        btn_opt.text = "..."
-        btn_opt.state = QStyle.StateFlag.State_Enabled
-        style.drawControl(QStyle.ControlElement.CE_PushButton, btn_opt, painter)
+        btn_opt.state = QStyle.StateFlag.State_Enabled | QStyle.StateFlag.State_Raised
+        btn_opt.palette = opt.palette
+        style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelButtonCommand, btn_opt, painter, opt.widget)
+
+        painter.save()
+        try:
+            painter.setPen(opt.palette.color(QPalette.ColorRole.ButtonText))
+            painter.drawText(btn_r, int(Qt.AlignmentFlag.AlignCenter), "…")
+        finally:
+            painter.restore()
 
     def editorEvent(self, event, model, option, index):
         # Only act on mouse release inside the button.
