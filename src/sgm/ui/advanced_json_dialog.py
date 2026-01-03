@@ -57,7 +57,19 @@ def _split_flags(value: str) -> list[str]:
 
 
 def _strip_wrapping_quotes(s: str) -> str:
-    s = s.strip()
+    s = (s or "").strip()
+    if not s:
+        return ""
+
+    # Accept both single- and double-quoted strings, including cases where the
+    # user entered a shell-quoted token (e.g. via shlex.quote).
+    try:
+        parts = shlex.split(s, posix=True)
+        if len(parts) == 1:
+            return parts[0]
+    except Exception:
+        pass
+
     if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
         return s[1:-1]
     return s
@@ -77,9 +89,50 @@ def _remove_equals_flag(tokens: list[str], flag_prefix: str) -> list[str]:
 
 def _quote_if_spaces(path_str: str) -> str:
     if any(ch.isspace() for ch in path_str):
-        # Always use double-quotes for jzintv flags.
-        return f'"{path_str}"'
+        # Default to single quotes for shell-style quoting.
+        return shlex.quote(path_str)
     return path_str
+
+
+def _is_single_shell_token(s: str) -> bool:
+    s = (s or "").strip()
+    if not s:
+        return True
+    try:
+        return len(shlex.split(s, posix=True)) == 1
+    except Exception:
+        return False
+
+
+def _normalize_other_flag_token(token: str) -> str:
+    """Normalize a token for storage/display as a single shell argument.
+
+    We parse jzintv_extra via shlex, which strips quotes. If a token contains
+    spaces (e.g. from --cheat='force ...'), it must be re-quoted so that when
+    we rebuild the string (" ".join(tokens)) it remains a single argument.
+
+    When the token contains '=', prefer quoting only the value side so the UI
+    shows: --flag='value with spaces' rather than quoting the whole token.
+    """
+
+    t = (token or "").strip()
+    if not t:
+        return ""
+    if not any(ch.isspace() for ch in t):
+        return t
+
+    # If the token is already quoted such that it's a single shell token, keep it.
+    if _is_single_shell_token(t):
+        return t
+
+    if "=" in t:
+        left, right = t.split("=", 1)
+        # Only quote the value if there's actually a value.
+        if right.strip() != "":
+            return f"{left}={shlex.quote(right)}"
+
+    # Fallback: quote the whole token.
+    return shlex.quote(t)
 
 
 def _local_to_device_path(*, root: Path, local_path: Path, media_prefix: str) -> str:
@@ -318,8 +371,11 @@ class AdvancedJsonDialog(QDialog):
 
         # Other flags list
         other = [t for t in tokens if not (t.startswith("--kbdhackfile=") or t.startswith("--gfx-palette="))]
+        other = [_normalize_other_flag_token(t) for t in other]
         self._list_flags.clear()
         for t in other:
+            if not str(t).strip():
+                continue
             item = QListWidgetItem(t)
             item.setData(Qt.ItemDataRole.UserRole, t)
             self._list_flags.addItem(item)
@@ -423,7 +479,8 @@ class AdvancedJsonDialog(QDialog):
         # Normalize: strip specialized flags we'll rebuild from UI
         tokens = _remove_equals_flag(tokens, "--kbdhackfile=")
         tokens = _remove_equals_flag(tokens, "--gfx-palette=")
-        return tokens
+        # Ensure other flags remain single shell tokens even if shlex stripped quotes.
+        return [_normalize_other_flag_token(t) for t in tokens]
 
     def _rebuild_extra_and_write(self, *, kbd: Path | None, palette: Path | None, other_flags: list[str]) -> None:
         tokens: list[str] = []
@@ -511,8 +568,10 @@ class AdvancedJsonDialog(QDialog):
         flag = (text or "").strip()
         if flag == "":
             return
-        if any(ch.isspace() for ch in flag) and not (flag.startswith('"') and flag.endswith('"')):
-            flag = f'"{flag}"'
+        # If the user's entry already parses as a single shell token (e.g.
+        # --cheat='force 0x00B5 0x00'), accept it as-is.
+        if any(ch.isspace() for ch in flag) and not _is_single_shell_token(flag):
+            flag = shlex.quote(flag)
 
         self._list_flags.addItem(QListWidgetItem(flag))
         self._list_flags.item(self._list_flags.count() - 1).setData(Qt.ItemDataRole.UserRole, flag)
@@ -533,8 +592,8 @@ class AdvancedJsonDialog(QDialog):
         new = (text or "").strip()
         if new == "":
             return
-        if any(ch.isspace() for ch in new) and not (new.startswith('"') and new.endswith('"')):
-            new = f'"{new}"'
+        if any(ch.isspace() for ch in new) and not _is_single_shell_token(new):
+            new = shlex.quote(new)
 
         it.setText(new)
         it.setData(Qt.ItemDataRole.UserRole, new)

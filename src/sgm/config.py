@@ -46,6 +46,10 @@ class AppConfig:
 
     use_box_image_for_box_small: bool = True
 
+    # If True: when adding a Big Overlay image, automatically build Overlay 1
+    # from it (only if Overlay 1 is currently missing).
+    auto_build_overlay: bool = False
+
     # Used when building jzintv flags that reference files on the target device.
     # Example output: --kbdhackfile="<prefix>/<relative_path>"
     jzintv_media_prefix: str = "/media/usb0"
@@ -110,6 +114,7 @@ class AppConfig:
             "QrCodeResolution": cfg.qrcode_resolution.to_string(),
             "SnapResolution": cfg.snap_resolution.to_string(),
             "UseBoxImageForBoxSmall": "True" if cfg.use_box_image_for_box_small else "False",
+            "AutoBuildOverlay": "True" if cfg.auto_build_overlay else "False",
             "JzIntvMediaPrefix": (cfg.jzintv_media_prefix or "/media/usb0").strip() or "/media/usb0",
             "MetadataEditors": "|".join(editors_clean_sorted),
             "JsonKeys": "|".join(json_keys_clean),
@@ -240,6 +245,10 @@ class AppConfig:
 
         cfg.use_box_image_for_box_small = _parse_bool(
             data.get("UseBoxImageForBoxSmall"), default=cfg.use_box_image_for_box_small
+        )
+
+        cfg.auto_build_overlay = _parse_bool(
+            data.get("AutoBuildOverlay"), default=cfg.auto_build_overlay
         )
 
         cfg.jzintv_media_prefix = (data.get("JzIntvMediaPrefix", cfg.jzintv_media_prefix) or "").strip() or "/media/usb0"

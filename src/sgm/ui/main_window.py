@@ -3257,7 +3257,7 @@ class MainWindow(QMainWindow):
         self._img_overlay_big = ImageCard(
             config=self._config,
             spec=ImageSpec(title="Overlay Big", expected=self._config.overlay_big_resolution, filename="{basename}_big_overlay.png"),
-            on_changed=self._images_changed,
+            on_changed=self._overlay_big_changed,
             keep_ratio_enabled=True,
             keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
@@ -3976,7 +3976,8 @@ class MainWindow(QMainWindow):
                 return
 
             new_name = dlg.value().strip()
-            if not new_name or sprint_name_key(new_name) == sprint_name_key(folder_dir.name):
+            # Allow case-only renames (e.g. Baseball -> BaseBall).
+            if not new_name or new_name == folder_dir.name:
                 return
 
             if any(c in new_name for c in "\\/:*?\"<>|"):
@@ -4011,7 +4012,9 @@ class MainWindow(QMainWindow):
                     return
 
             new_dir = parent / new_name
-            if new_dir.exists():
+            # If new_dir exists but it's the same directory (case-only rename on a
+            # case-insensitive filesystem), allow it.
+            if new_dir.exists() and sprint_path_key(new_dir) != sprint_path_key(folder_dir):
                 QMessageBox.warning(self, "Rename blocked", f"{new_dir.name} already exists")
                 return
 
@@ -4027,7 +4030,18 @@ class MainWindow(QMainWindow):
                 return
 
             try:
-                folder_dir.rename(new_dir)
+                if sprint_path_key(new_dir) == sprint_path_key(folder_dir) and folder_dir.name != new_name:
+                    # Windows/NTFS is case-preserving but typically case-insensitive;
+                    # use a two-step rename to force a casing change.
+                    tmp = parent / f"{folder_dir.name}.__tmp_rename__"
+                    i = 0
+                    while tmp.exists():
+                        i += 1
+                        tmp = parent / f"{folder_dir.name}.__tmp_rename__{i}"
+                    folder_dir.rename(tmp)
+                    tmp.rename(new_dir)
+                else:
+                    folder_dir.rename(new_dir)
             except Exception as e:
                 QMessageBox.warning(self, "Rename failed", str(e))
                 return
@@ -4054,7 +4068,8 @@ class MainWindow(QMainWindow):
             return
 
         new_base = dlg.value().strip()
-        if not new_base or sprint_name_key(new_base) == sprint_name_key(game.basename):
+        # Allow case-only renames (e.g. Baseball -> BaseBall).
+        if not new_base or new_base == game.basename:
             return
 
         if any(c in new_base for c in "\\/:*?\"<>|"):
@@ -4103,6 +4118,63 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         QMessageBox.warning(self, "Box Small", str(e))
         # Preserve unsaved metadata edits when updating image thumbnails.
+        self.refresh(preserve_metadata_edits=True)
+
+    def _overlay_big_changed(self) -> None:
+        """Handle updates to the Big Overlay image slot.
+
+        If AutoBuildOverlay is enabled and Overlay 1 is missing, automatically build
+        Overlay 1 from the Big Overlay image.
+        """
+
+        assets = self._current_assets()
+        if not assets:
+            self.refresh(preserve_metadata_edits=True)
+            return
+
+        # Default: behave like normal image updates.
+        if not bool(getattr(self._config, "auto_build_overlay", False)):
+            self.refresh(preserve_metadata_edits=True)
+            return
+
+        overlay1 = assets.folder / f"{assets.basename}_overlay.png"
+        if overlay1.exists():
+            self.refresh(preserve_metadata_edits=True)
+            return
+
+        big_overlay = assets.folder / f"{assets.basename}_big_overlay.png"
+        if not big_overlay.exists():
+            self.refresh(preserve_metadata_edits=True)
+            return
+
+        blank_default = resource_path("Overlay_blank.png")
+        override_raw = (self._config.overlay_template_override or "").strip()
+        blank = Path(override_raw).expanduser() if override_raw else blank_default
+        if not blank.exists():
+            msg = f"Missing overlay template. Expected {blank_default}"
+            if override_raw:
+                msg = f"Missing overlay template override: {blank}"
+            QMessageBox.warning(self, "AutoBuildOverlay", msg)
+            self.refresh(preserve_metadata_edits=True)
+            return
+
+        build_res = self._config.overlay_build_resolution
+        pos = self._config.overlay_build_position
+
+        try:
+            build_overlay_png_from_file(
+                blank,
+                big_overlay,
+                overlay1,
+                overlay_resolution=self._config.overlay_resolution,
+                build_resolution=build_res,
+                position=pos,
+            )
+        except ImageProcessError as e:
+            QMessageBox.warning(self, "AutoBuildOverlay", str(e))
+        except Exception as e:
+            QMessageBox.warning(self, "AutoBuildOverlay", str(e))
+
         self.refresh(preserve_metadata_edits=True)
 
     def _regenerate_box_small(self) -> None:

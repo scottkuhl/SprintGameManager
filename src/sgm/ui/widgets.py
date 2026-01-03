@@ -370,8 +370,8 @@ class ImageCard(QFrame):
         if not self._confirm_replace_if_needed(dest):
             event.ignore()
             return
-        # Spec: Keep Ratio applies only for Browse/Paste.
-        self._replace_from_file(p, preserve_ratio=False)
+        preserve = bool(self._keep_ratio_enabled and self._chk_keep_ratio and self._chk_keep_ratio.isChecked())
+        self._replace_from_file(p, preserve_ratio=preserve)
         event.acceptProposedAction()
 
     def _paste(self) -> None:
@@ -576,7 +576,8 @@ class SnapshotCard(ImageCard):
             if urls:
                 p = Path(urls[0].toLocalFile())
                 if p.exists() and p.is_file():
-                    self._replace_from_file(p, preserve_ratio=False)
+                    preserve = bool(self._keep_ratio_enabled and self._chk_keep_ratio and self._chk_keep_ratio.isChecked())
+                    self._replace_from_file(p, preserve_ratio=preserve)
                     event.acceptProposedAction()
                     return
 
