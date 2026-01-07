@@ -106,6 +106,7 @@ class ImageCard(QFrame):
         self._existing_path: Path | None = None
         self._extra_handler = None
         self._blank_handler = None
+        self._extra_requires_image: bool = False
         self._keep_ratio_enabled = keep_ratio_enabled
         self._chk_keep_ratio: QCheckBox | None = None
 
@@ -231,6 +232,7 @@ class ImageCard(QFrame):
     def set_extra_action(self, label: str, handler, tooltip: str | None = None) -> None:
         self._btn_extra.setText(label)
         self._btn_extra.setToolTip(tooltip or label)
+        self._extra_requires_image = False
         if self._extra_handler is not None and self._extra_handler is not handler:
             try:
                 self._btn_extra.clicked.disconnect(self._extra_handler)
@@ -239,6 +241,10 @@ class ImageCard(QFrame):
         self._extra_handler = handler
         self._btn_extra.clicked.connect(handler)
         self._btn_extra.setVisible(True)
+
+    def set_extra_action_requires_existing_image(self, requires_image: bool) -> None:
+        """Control whether the Extra button is enabled only when an image exists."""
+        self._extra_requires_image = bool(requires_image)
 
     def set_blank_action(self, handler, tooltip: str | None = None) -> None:
         if self._blank_handler is not None and self._blank_handler is not handler:
@@ -267,7 +273,7 @@ class ImageCard(QFrame):
         has_image = bool(existing_path and existing_path.exists())
         self._btn_browse.setEnabled(bool(self._folder and self._basename))
         self._btn_resize.setVisible(has_image and needs_resize)
-        self._btn_extra.setEnabled(bool(self._folder and self._basename))
+        self._btn_extra.setEnabled(bool(self._folder and self._basename) and (not self._extra_requires_image or has_image))
         self._btn_blank.setEnabled(bool(self._folder and self._basename))
 
         if existing_path and existing_path.exists():

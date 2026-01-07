@@ -41,6 +41,7 @@ class AppConfig:
     overlay_build_resolution: Resolution = Resolution(180, 286)
     overlay_build_position: tuple[int, int] = (25, 5)
     overlay_template_override: str = ""
+    overlay_cutter_template: str = ""
     qrcode_resolution: Resolution = Resolution(123, 123)
     snap_resolution: Resolution = Resolution(640, 400)
 
@@ -111,6 +112,7 @@ class AppConfig:
             "OverlayBuildResolution": cfg.overlay_build_resolution.to_string(),
             "OverlayBuildPosition": f"{cfg.overlay_build_position[0]},{cfg.overlay_build_position[1]}",
             "OverlayTemplateOverride": (cfg.overlay_template_override or ""),
+            "OverlayCutterTemplate": (cfg.overlay_cutter_template or ""),
             "QrCodeResolution": cfg.qrcode_resolution.to_string(),
             "SnapResolution": cfg.snap_resolution.to_string(),
             "UseBoxImageForBoxSmall": "True" if cfg.use_box_image_for_box_small else "False",
@@ -234,6 +236,7 @@ class AppConfig:
             default=cfg.overlay_build_position,
         )
         cfg.overlay_template_override = data.get("OverlayTemplateOverride", "").strip()
+        cfg.overlay_cutter_template = data.get("OverlayCutterTemplate", "").strip()
         cfg.qrcode_resolution = Resolution.parse(
             data.get("QrCodeResolution", cfg.qrcode_resolution.to_string()),
             default=cfg.qrcode_resolution,

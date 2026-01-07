@@ -71,6 +71,7 @@ from sgm.io_utils import (
 from sgm.scanner import _classify, scan_folder
 from sgm.ui.advanced_json_dialog import AdvancedJsonDialog
 from sgm.ui.bulk_json_update_dialog import BulkJsonUpdateDialog
+from sgm.ui.overlay_cleaner_dialog import OverlayImageCleanerDialog
 from sgm.ui.widgets import ImageCard, ImageSpec, OverlayCard, OverlayPrimaryCard, SnapshotCard
 from sgm.ui.dialog_state import get_start_dir, remember_path
 from sgm.version import main_window_title
@@ -3372,6 +3373,12 @@ class MainWindow(QMainWindow):
             keep_ratio_enabled=True,
             keep_ratio_tooltip="When checked, added images keep their aspect ratio (no stretching) by fitting inside the target resolution and centering on a transparent canvas.",
         )
+        self._img_overlay_big.set_extra_action(
+            "Clean",
+            self._clean_overlay_big,
+            "Open Overlay Image Cleaner for this image.",
+        )
+        self._img_overlay_big.set_extra_action_requires_existing_image(True)
         images_grid.addWidget(self._img_overlay_big, 1, 0)
 
         self._img_overlay1 = OverlayPrimaryCard(
@@ -4287,6 +4294,33 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "AutoBuildOverlay", str(e))
 
         self.refresh(preserve_metadata_edits=True)
+
+    def _clean_overlay_big(self) -> None:
+        assets = self._current_assets()
+        if not assets:
+            return
+
+        src = assets.folder / f"{assets.basename}_big_overlay.png"
+        if not src.exists():
+            QMessageBox.information(self, "Overlay Image Cleaner", "Big Overlay is missing")
+            return
+
+        dlg = OverlayImageCleanerDialog(
+            parent=self,
+            image_path=src,
+            target_resolution=self._config.overlay_big_resolution,
+            cutter_template=getattr(self._config, "overlay_cutter_template", ""),
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_image is None:
+            return
+
+        try:
+            dlg.result_image.save(src, "PNG")
+        except Exception as e:
+            QMessageBox.warning(self, "Overlay Image Cleaner", str(e))
+            return
+
+        self._overlay_big_changed()
 
     def _regenerate_box_small(self) -> None:
         if not self._config.use_box_image_for_box_small:
